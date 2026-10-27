@@ -1,0 +1,48 @@
+# symbols the first mods and the KogamaStudio port lean on
+# module defaults to Assembly-CSharp.dll; /N pins the parameter count
+# world switch + tcp
+MVGameControllerBase::TryReauth/0
+AsyncWWWManager::WWWRequest/1
+MVGameControllerBase::OnReceivedReAuthWebParametersFromHttpRequest/1
+MVGameControllerDesktop::get_Instance/0
+MVGameControllerDesktop::Start/0
+GameLoader::Cleanup/0
+GameLoader::UnloadGame/0
+HackingToolDetector::Initialize/1
+FullScreenController::set_FullScreen/1
+MVGameControllerBase::SetWindowPos/7
+UpdateController::Clear/0
+AsyncWWWManager::Reset/0
+UnityEngine.CoreModule.dll!UnityEngine.Component::get_gameObject/0
+UnityEngine.CoreModule.dll!UnityEngine.Object::Destroy/1
+UnityEngine.CoreModule.dll!UnityEngine.Cursor::set_lockState/1
+UnityEngine.CoreModule.dll!UnityEngine.Cursor::set_visible/1
+UnityEngine.CoreModule.dll!UnityEngine.Time::get_frameCount/0
+# kogamastudio hook + toggle targets (a spread, nested types included)
+MVNetworkGame.OperationRequests::Ban
+MVNetworkGame.OperationRequests::AddItemToWorld
+MVNetworkGame.OperationRequests::Kick
+MVNetworkGame.OperationRequests::Expel
+ModelingBoxCountConstraint::CanAddCubeAt
+ModelingBoxCountConstraint::CanRemoveCubeAt
+ModelingDynamicBoxConstraint::CanAddCubeAt
+MainCameraManager::get_BlueModeEnabled
+MainCameraManager::set_BlueModeEnabled
+MVMaterial::get_IsAvailable
+MaterialLoader::SetMainTexture
+MVWorldObjectClient::Initialize
+MVWorldObjectClient::GetClosestGridPoint
+MVWorldObjectClientManagerNetwork::DestroyWO
+MVWorldObjectClientManagerNetwork::AddToWorldObjects
+EditorWorldObjectCreation::Initialize
+EditorWorldObjectCreation::OnAddNewPrototype
+ChatControllerBase::AddChatLine
+SendMessageControl::SendChatMessage
+LoadingScreenHandler::Start
+Theme::Activate
+Theme::Deactivate
+MVPickupOwner::CreateAndEquipNewItem
+MVBuildModeAvatarLocal.EditMode::MoveCharacter
+CheatHandling::Init
+WorldNetwork::AddWorldObject
+WorldNetwork::OnGameDataDeserialized

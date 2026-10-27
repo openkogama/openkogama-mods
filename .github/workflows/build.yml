@@ -1,0 +1,284 @@
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  patcher:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: build patcher
+        run: dotnet build patcher/OpenKogama.Mods.Patcher.csproj -c Release
+
+      - name: decoder selftest
+        run: dotnet run --project patcher/OpenKogama.Mods.Patcher.csproj -c Release --no-build -- selftest
+
+      - name: cache client 3.5.25
+        id: client
+        uses: actions/cache@v4
+        with:
+          path: client
+          key: kogama-3.5.25-119989fe
+
+      - name: download client 3.5.25
+        if: steps.client.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/bustersky13/kogama-version-tracker/releases/download/versions/kogama--119989fe-87c4-4d35-b53d-7ac0db503f1b.zip"
+          Invoke-WebRequest -Uri $url -OutFile client.zip
+          $sha = (Get-FileHash client.zip -Algorithm SHA256).Hash.ToLower()
+          if ($sha -ne "2e6f2bf1268a5d93bffe487c174a95a4c7a0b17b28ba492d75f3073e24dccab8") { throw "sha mismatch: $sha" }
+          Expand-Archive client.zip -DestinationPath client
+
+      - name: resolve symbols
+        shell: pwsh
+        run: |
+          $game = (Get-ChildItem client -Recurse -Filter GameAssembly.dll | Select-Object -First 1).FullName
+          $meta = (Get-ChildItem client -Recurse -Filter global-metadata.dat | Select-Object -First 1).FullName
+          "game: $game"
+          "metadata: $meta"
+          $symbols = Get-Content .github/symbols.txt | Where-Object { $_ -and -not $_.StartsWith('#') }
+          $run = "patcher/OpenKogama.Mods.Patcher.csproj"
+          dotnet run --project $run -c Release --no-build -- header $meta
+          $p = dotnet run --project $run -c Release --no-build -- params $game $meta "EditorWorldObjectCreation::OnAddNewPrototype" | Out-String
+          Write-Output $p
+          if ($p -notmatch "\(name, scale\)") { throw "parameter names did not resolve" }
+          dotnet run --project $run -c Release --no-build -- dump $game $meta > methods.txt
+          "dumped $((Get-Content methods.txt).Count) methods"
+          dotnet run --project $run -c Release --no-build -- resolve $game $meta @symbols
+
+      - name: inject okmod loader
+        shell: pwsh
+        run: |
+          $game = (Get-ChildItem client -Recurse -Filter GameAssembly.dll | Select-Object -First 1).FullName
+          $run = "patcher/OpenKogama.Mods.Patcher.csproj"
+          dotnet run --project $run -c Release --no-build -- patch loader $game patched.dll
+          python tools/pecheck.py patched.dll okmod.dll
+
+      - name: apply client fixes
+        shell: pwsh
+        run: |
+          $game = (Get-ChildItem client -Recurse -Filter GameAssembly.dll | Select-Object -First 1).FullName
+          $meta = (Get-ChildItem client -Recurse -Filter global-metadata.dat | Select-Object -First 1).FullName
+          $run = "patcher/OpenKogama.Mods.Patcher.csproj"
+          dotnet run --project $run -c Release --no-build -- patch fix $game $meta fixed.dll world-switch tcp
+
+      - name: install framework patches
+        shell: pwsh
+        run: |
+          $game = (Get-ChildItem client -Recurse -Filter GameAssembly.dll | Select-Object -First 1).FullName
+          $meta = (Get-ChildItem client -Recurse -Filter global-metadata.dat | Select-Object -First 1).FullName
+          $run = "patcher/OpenKogama.Mods.Patcher.csproj"
+          dotnet run --project $run -c Release --no-build -- patch install $game $meta installed.dll
+          python tools/pecheck.py installed.dll okmod.dll
+          python tools/okverify.py installed.dll installed.dll.sites
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: methods
+          path: methods.txt
+
+  versions:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - unity: "2018.4.32f1"
+            url: "https://github.com/bustersky13/version-storage/releases/download/versions/kogama-230011-88c4ade3-6042-498f-a1a8-57185afbeba8.zip"
+          - unity: "2021.3.14f1"
+            url: "https://github.com/bustersky13/kogama-version-tracker/releases/download/versions/kogama-230063-1f7bec71-0cce-4777-a61f-aea86531292a.zip"
+          - unity: "2022.3.13f1"
+            url: "https://github.com/bustersky13/kogama-version-tracker/releases/download/versions/kogama-300090-b5aae515-9b9d-4fed-88e0-a5f9101b09a6.zip"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: build patcher
+        run: dotnet build patcher/OpenKogama.Mods.Patcher.csproj -c Release
+      - name: survey ${{ matrix.unity }}
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "${{ matrix.url }}" -OutFile build.zip
+          Expand-Archive build.zip -DestinationPath build
+          $game = (Get-ChildItem build -Recurse -Filter GameAssembly.dll | Select-Object -First 1).FullName
+          $meta = (Get-ChildItem build -Recurse -Filter global-metadata.dat | Select-Object -First 1).FullName
+          $run = "patcher/OpenKogama.Mods.Patcher.csproj"
+          "## ${{ matrix.unity }}"
+          dotnet run --project $run -c Release --no-build -- header $meta | Select-Object -First 2
+          dotnet run --project $run -c Release --no-build -- resolve $game $meta
+          dotnet run --project $run -c Release --no-build -- patch install $game $meta installed.dll
+          if (Test-Path installed.dll) {
+            python tools/pecheck.py installed.dll okmod.dll
+            python tools/okverify.py installed.dll installed.dll.sites
+          }
+          exit 0
+
+  ingame:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: openkogama/openkogama-server
+          path: server-src
+      - uses: actions/checkout@v4
+        with:
+          repository: openkogama/openkogama-photon
+          path: openkogama-photon
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: build server, core and patcher
+        run: |
+          dotnet build server-src/openkogama-server.csproj -c Release -o server
+          cmake -S core -B core/build -A x64
+          cmake --build core/build --config Release
+          dotnet build patcher/OpenKogama.Mods.Patcher.csproj -c Release
+
+      - name: cache client 3.5.25
+        id: client
+        uses: actions/cache@v4
+        with:
+          path: client
+          key: kogama-3.5.25-119989fe
+      - name: download client 3.5.25
+        if: steps.client.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/bustersky13/kogama-version-tracker/releases/download/versions/kogama--119989fe-87c4-4d35-b53d-7ac0db503f1b.zip"
+          Invoke-WebRequest -Uri $url -OutFile client.zip
+          Expand-Archive client.zip -DestinationPath client
+
+      - name: patch client and stage okmod
+        shell: pwsh
+        run: |
+          $game = (Get-ChildItem client -Recurse -Filter GameAssembly.dll | Select-Object -First 1).FullName
+          $meta = (Get-ChildItem client -Recurse -Filter global-metadata.dat | Select-Object -First 1).FullName
+          $dir = Split-Path $game
+          dotnet run --project patcher/OpenKogama.Mods.Patcher.csproj -c Release --no-build -- patch install $game $meta "$game.patched"
+          Move-Item -Force "$game.patched" $game
+          Copy-Item core/build/Release/okmod.dll $dir
+          New-Item -ItemType Directory -Force -Path "$dir/mods" | Out-Null
+          Copy-Item core/build/Release/marker.dll "$dir/mods"
+          Copy-Item core/build/Release/camera.dll "$dir/mods"
+
+      - name: run server and launch client
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force run2 | Out-Null
+          $srv = Start-Process -FilePath "dotnet" -ArgumentList "$(Resolve-Path server/openkogama-server.dll)" -WorkingDirectory (Resolve-Path run2) -PassThru -RedirectStandardOutput server.out -RedirectStandardError server.err
+          Start-Sleep -Seconds 15
+          $exe = Get-ChildItem client -Recurse -Filter *.exe | Where-Object { $_.Name -notmatch "crash|handler|UnityCrash" } | Select-Object -First 1
+          $dir = $exe.DirectoryName
+          "client exe: $($exe.FullName)"
+          $url = "http://127.0.0.1:8080/session?mode=play&key=test&client=3.5.25&unity=6000.2.7f2"
+          $pkg = "kogamaPackage:" + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($url))
+          $cli = Start-Process -FilePath $exe.FullName -ArgumentList @($pkg, "-logFile", "$dir\client.log", "-batchmode", "-nographics") -WorkingDirectory $dir -PassThru
+          for ($i = 0; $i -lt 18; $i++) {
+            Start-Sleep -Seconds 5
+            if (Test-Path "$dir\okmod-fired.txt") { break }
+          }
+          Stop-Process -Id $cli.Id -Force -ErrorAction SilentlyContinue
+          Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
+          $fired = Test-Path "$dir\okmod-fired.txt"
+          if ($fired) { Write-Output "=== DETOUR FIRED IN GAME ==="; Get-Content "$dir\okmod-fired.txt" | Select-Object -Unique }
+          Write-Output "--- client log tail ---"; Get-Content "$dir\client.log" -ErrorAction SilentlyContinue | Select-Object -Last 20
+          Write-Output "--- server out ---"; Get-Content server.out -ErrorAction SilentlyContinue | Select-Object -Last 20
+          if (-not $fired) { throw "no okmod detour fired in the running game" }
+
+  mono:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: build patcher and shim
+        run: |
+          dotnet build patcher/OpenKogama.Mods.Patcher.csproj -c Release
+          dotnet build shim/OkModShim.csproj -c Release
+      - name: resolve and patch a mono build
+        shell: pwsh
+        run: |
+          $url = "https://github.com/bustersky13/version-storage/releases/download/versions/kogama-230006-57eff71c-042d-416b-b01b-b2c2e0c9cce5.zip"
+          Invoke-WebRequest -Uri $url -OutFile mono.zip
+          Expand-Archive mono.zip -DestinationPath mono
+          $asm = (Get-ChildItem mono -Recurse -Filter Assembly-CSharp.dll | Where-Object { $_.FullName -match "Managed" } | Select-Object -First 1).FullName
+          $shim = (Get-ChildItem shim/bin -Recurse -Filter OkModShim.dll | Select-Object -First 1).FullName
+          $run = "patcher/OpenKogama.Mods.Patcher.csproj"
+          dotnet run --project $run -c Release --no-build -- mono $asm `
+            "ModelingBoxCountConstraint::CanAddCubeAt" "MVMaterial::get_IsAvailable" `
+            "MVBuildModeAvatarLocal.EditMode::MoveCharacter" "EditorWorldObjectCreation::OnAddNewPrototype"
+          dotnet run --project $run -c Release --no-build -- patch mono $asm $shim patched-cs.dll
+          $il = dotnet run --project $run -c Release --no-build -- monoil patched-cs.dll "ModelingBoxCountConstraint::CanAddCubeAt" | Out-String
+          Write-Output $il
+          if ($il -notmatch "OpenKogama.Mods.OkMod::Flag" -or $il -notmatch "OkModShim: True") { throw "mono IL toggle not injected" }
+
+  core:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, Win32]
+    steps:
+      - uses: actions/checkout@v4
+      - name: configure
+        run: cmake -S core -B core/build -A ${{ matrix.arch }}
+      - name: build
+        run: cmake --build core/build --config Release
+      - name: test
+        run: ctest --test-dir core/build -C Release --output-on-failure
+
+  load:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: build core and patcher
+        run: |
+          cmake -S core -B core/build
+          cmake --build core/build --config Release
+          dotnet build patcher/OpenKogama.Mods.Patcher.csproj -c Release
+
+      - name: cache client 3.5.25
+        id: client
+        uses: actions/cache@v4
+        with:
+          path: client
+          key: kogama-3.5.25-119989fe
+
+      - name: download client 3.5.25
+        if: steps.client.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/bustersky13/kogama-version-tracker/releases/download/versions/kogama--119989fe-87c4-4d35-b53d-7ac0db503f1b.zip"
+          Invoke-WebRequest -Uri $url -OutFile client.zip
+          Expand-Archive client.zip -DestinationPath client
+
+      - name: patch, stage and load
+        shell: pwsh
+        run: |
+          $game = (Get-ChildItem client -Recurse -Filter GameAssembly.dll | Select-Object -First 1).FullName
+          $dir = Split-Path $game
+          $run = "patcher/OpenKogama.Mods.Patcher.csproj"
+          dotnet run --project $run -c Release --no-build -- patch loader $game "$game.patched"
+          Move-Item -Force "$game.patched" $game
+          Copy-Item core/build/Release/okmod.dll $dir
+          New-Item -ItemType Directory -Force -Path "$dir/mods" | Out-Null
+          Copy-Item core/build/Release/hello.dll "$dir/mods"
+          $out = & core/build/Release/loadtest.exe $game 2>&1 | Out-String
+          Write-Output $out
+          if ($out -notmatch "hello mod up") { throw "okmod did not load its mod into the patched game" }
+          Write-Output "the patched game loaded okmod and ran a mod"

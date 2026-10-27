@@ -1,4 +1,4 @@
-namespace OpenKogama.Mods.Patcher;
+namespace OpenKogama.Mods.Patches;
 
 public sealed class Pe
 {

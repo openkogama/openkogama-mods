@@ -1,7 +1,7 @@
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 
-namespace OpenKogama.Mods.Patcher;
+namespace OpenKogama.Mods.Patches;
 
 public static class MonoPatch
 {

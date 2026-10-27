@@ -1,4 +1,4 @@
-namespace OpenKogama.Mods.Patcher;
+namespace OpenKogama.Mods.Patches;
 
 public static class Hook
 {
@@ -11,14 +11,14 @@ public static class Hook
     public enum Kind { Toggle, Event }
     public readonly record struct Site(Kind Kind, string Name, uint Rva, byte Return);
 
-    public static List<Site> Apply(Pe pe, uint flagIat, uint eventIat, IReadOnlyList<Site> sites)
+    public static List<Site> Apply(Pe pe, uint flagIat, uint eventIat, IReadOnlyList<Site> sites, Action<string> log)
     {
         bool x86 = !pe.Is64;
 
         var plan = new List<(Site S, int Steal, byte[] Stolen)>();
         foreach (Site s in sites)
         {
-            if (x86 && s.Kind == Kind.Event) { Console.WriteLine($"detours: x86 event stub not written yet, skipping {s.Name}"); continue; }
+            if (x86 && s.Kind == Kind.Event) { log($"detours: x86 event stub not written yet, skipping {s.Name}"); continue; }
             int raw = pe.Rva2Raw(s.Rva);
             int steal = X64.StealLength(pe.Bytes, raw, JmpBack, x86);
             if (steal == 0 || pe.Relocations(s.Rva, steal, false)) continue;

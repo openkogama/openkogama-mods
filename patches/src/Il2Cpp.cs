@@ -1,13 +1,16 @@
 using System.Text;
 
-namespace OpenKogama.Mods.Patcher;
+namespace OpenKogama.Mods.Patches;
 
 public sealed class Il2Cpp
 {
+    public const string Game = "Assembly-CSharp.dll";
+    public const string Engine = "UnityEngine.CoreModule.dll";
     const uint Sanity = 0xFAB11BAF;
     const int TypeSize = 88;
     const int ImageSize = 40;
     const int MaxMethods = 1_000_000;
+    const int NoGenericContainer = -1;
 
     readonly byte[] _metadata;
     readonly ulong _imageBase;
@@ -18,6 +21,7 @@ public sealed class Il2Cpp
     readonly Dictionary<string, ulong[]> _pointers = [];
     readonly Dictionary<int, string> _typeNames = [];
     readonly Dictionary<int, int> _parent = [];
+    readonly HashSet<(string Module, string Type)> _nestedTypes = [];
     bool _nested;
     readonly Dictionary<uint, int> _uses = [];
     uint[] _starts = [];
@@ -66,8 +70,22 @@ public sealed class Il2Cpp
     public uint? Find(string module, string type, string method, int parameters) =>
         _rvas.TryGetValue((module, type, method, parameters), out uint rva) ? rva : null;
 
-    public uint? Find(string type, string method, int parameters) => Find("Assembly-CSharp.dll", type, method, parameters);
-    public uint? FindEngine(string type, string method, int parameters) => Find("UnityEngine.CoreModule.dll", type, method, parameters);
+    public uint? Find(string type, string method, int parameters) => Find(Game, type, method, parameters);
+    public uint? FindEngine(string type, string method, int parameters) => Find(Engine, type, method, parameters);
+
+    public IEnumerable<(string Type, uint Rva)> Named(string method, int parameters) =>
+        _rvas.Where(pair => pair.Key.Module == Game && pair.Key.Method == method && pair.Key.Parameters == parameters && !_nestedTypes.Contains((Game, pair.Key.Type)))
+            .Select(pair => (pair.Key.Type, pair.Value));
+
+    public HashSet<uint> CallTargets()
+    {
+        var targets = new HashSet<uint>();
+        foreach ((uint va, uint size, uint raw) in _sections)
+            for (long at = 0; at + 5 <= size && raw + at + 5 <= Binary.Length; at++)
+                if (Binary[raw + at] is 0xE8 or 0xE9)
+                    targets.Add((uint)(va + at + 5 + BitConverter.ToInt32(Binary, (int)(raw + at + 1))));
+        return targets;
+    }
 
     public void Unrelocate(uint rva, int length)
     {
@@ -99,7 +117,7 @@ public sealed class Il2Cpp
     public IReadOnlyList<string>? ParamsOf(string module, string type, string method, int parameters) =>
         _params.TryGetValue((module, type, method, parameters), out string[]? p) ? p : null;
 
-    public IReadOnlyList<string>? ParamsOf(string type, string method, int parameters) => ParamsOf("Assembly-CSharp.dll", type, method, parameters);
+    public IReadOnlyList<string>? ParamsOf(string type, string method, int parameters) => ParamsOf(Game, type, method, parameters);
 
     public bool IsStatic(string module, string type, string method, int parameters) =>
         _static.TryGetValue((module, type, method, parameters), out bool s) && s;
@@ -109,7 +127,7 @@ public sealed class Il2Cpp
         IReadOnlyList<string>? names = ParamsOf(type, method, parameters);
         int index = names is null ? -1 : names.ToList().IndexOf(paramName);
         if (index < 0) return -1;
-        int reg = index + (IsStatic("Assembly-CSharp.dll", type, method, parameters) ? 0 : 1);
+        int reg = index + (IsStatic(Game, type, method, parameters) ? 0 : 1);
         return reg > 3 ? -1 : isFloat ? 4 + reg : reg;
     }
 
@@ -152,11 +170,13 @@ public sealed class Il2Cpp
             {
                 int at = Int(160) + type * TypeSize;
                 string typeName = FullName(type);
+                if (_parent.ContainsKey(type)) _nestedTypes.Add((module, typeName));
                 for (int method = Int(at + 36); method < Int(at + 36) + BitConverter.ToUInt16(_metadata, at + 64); method++)
                 {
                     int definition = methods + method * methodSize;
                     uint token = BitConverter.ToUInt32(_metadata, definition + methodSize - 12);
                     count = Math.Max(count, (int)(token & 0xFFFFFF));
+                    if (Int(definition + methodSize - 16) != NoGenericContainer) continue;
                     int parameterCount = BitConverter.ToUInt16(_metadata, definition + methodSize - 2);
                     var key = (typeName, Name(Int(definition)), parameterCount);
                     if (!tokens.TryAdd(key, token)) { overloaded.Add(key); continue; }

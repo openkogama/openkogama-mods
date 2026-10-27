@@ -1,7 +1,8 @@
-using OpenKogama.Mods.Patcher;
+using Mono.Cecil;
+using OpenKogama.Mods.Patches;
 
-const string Game = "Assembly-CSharp.dll";
-const string Engine = "UnityEngine.CoreModule.dll";
+const string Game = Il2Cpp.Game;
+const string Engine = Il2Cpp.Engine;
 
 if (args is ["resolve", string binary, string metadata, .. var symbols])
     return Resolve(binary, metadata, symbols);
@@ -19,8 +20,10 @@ if (args is ["monoil", string ilAsm, string ilSymbol])
     return MonoIl(ilAsm, ilSymbol);
 if (args is ["patch", "loader", string loaderIn, string loaderOut])
     return InjectLoader(loaderIn, loaderOut);
-if (args is ["patch", "fix", string fixBinary, string fixMetadata, string fixOut, .. var fixes] && fixes.Length > 0)
+if (args is ["patch", "fix", string fixBinary, string fixMetadata, string fixOut, .. var fixes] && fixes.Length > 0 && fixMetadata.EndsWith(".dat"))
     return ApplyFix(fixBinary, fixMetadata, fixOut, fixes);
+if (args is ["patch", "fix", string fixAssembly, string fixAssemblyOut, .. var assemblyFixes] && assemblyFixes.Length > 0)
+    return ApplyManagedFix(fixAssembly, fixAssemblyOut, assemblyFixes);
 if (args is ["patch", "install", string tBinary, string tMetadata, string tOut])
     return Install(tBinary, tMetadata, tOut);
 if (args is ["patch", "mono", string mBinary, string mShim, string mOut])
@@ -31,7 +34,8 @@ Console.WriteLine("       okpatch dump <GameAssembly.dll> <global-metadata.dat> 
 Console.WriteLine("       okpatch header <global-metadata.dat>");
 Console.WriteLine("       okpatch params <GameAssembly.dll> <global-metadata.dat> <Type::Method[/N] ...>");
 Console.WriteLine("       okpatch patch loader <GameAssembly.dll> <out>");
-Console.WriteLine("       okpatch patch fix <GameAssembly.dll> <global-metadata.dat> <out> [tcp ...]");
+Console.WriteLine($"       okpatch patch fix <GameAssembly.dll> <global-metadata.dat> <out> [{string.Join(" ", Fixes.All[1..^1])}]");
+Console.WriteLine($"       okpatch patch fix <Assembly-CSharp.dll> <out> [{string.Join(" ", Fixes.All[..^1])}]");
 Console.WriteLine("       okpatch patch install <GameAssembly.dll> <global-metadata.dat> <out>");
 Console.WriteLine("       okpatch patch mono <Assembly-CSharp.dll> <OkModShim.dll> <out>");
 Console.WriteLine("  a symbol without a module defaults to Assembly-CSharp.dll; without /params, any count matches");
@@ -43,7 +47,7 @@ static int ApplyFix(string binary, string metadata, string output, string[] fixe
     try
     {
         il2cpp = new Il2Cpp(File.ReadAllBytes(binary), File.ReadAllBytes(metadata));
-        il2cpp.Load("Assembly-CSharp.dll", "UnityEngine.CoreModule.dll");
+        il2cpp.Load(Game, Engine);
     }
     catch (Exception error)
     {
@@ -51,23 +55,33 @@ static int ApplyFix(string binary, string metadata, string output, string[] fixe
         return 1;
     }
 
-    var applied = new List<string>();
-    foreach (string fix in fixes)
-    {
-        bool ok = fix switch
-        {
-            "tcp" => Fix.UseTcp(il2cpp),
-            "world-switch" => Fix.Reload(il2cpp),
-            _ => Unknown(fix),
-        };
-        if (ok) applied.Add(fix);
-    }
+    foreach (string fix in fixes.Where(fix => !Fixes.All.Contains(fix))) Console.WriteLine($"fix: unknown fix {fix}");
+    List<string> applied = Fixes.Apply(il2cpp, fixes, line => Console.WriteLine($"fix: {line}"));
     if (applied.Count == 0) { Console.WriteLine("fix: nothing changed"); return 3; }
     File.WriteAllBytes(output, il2cpp.Binary);
     foreach (string fix in applied) Console.WriteLine($"fix: applied {fix}");
     return 0;
+}
 
-    static bool Unknown(string fix) { Console.WriteLine($"fix: unknown fix {fix}"); return false; }
+static int ApplyManagedFix(string assembly, string output, string[] fixes)
+{
+    var resolver = new DefaultAssemblyResolver();
+    resolver.AddSearchDirectory(Path.GetDirectoryName(Path.GetFullPath(assembly)));
+    try
+    {
+        using var module = ModuleDefinition.ReadModule(new MemoryStream(File.ReadAllBytes(assembly)), new ReaderParameters { AssemblyResolver = resolver });
+        foreach (string fix in fixes.Where(fix => !Fixes.All.Contains(fix))) Console.WriteLine($"fix: unknown fix {fix}");
+        List<string> applied = Fixes.Apply(module, fixes);
+        if (applied.Count == 0) { Console.WriteLine("fix: nothing changed"); return 3; }
+        module.Write(output);
+        foreach (string fix in applied) Console.WriteLine($"fix: applied {fix}");
+        return 0;
+    }
+    catch (Exception error)
+    {
+        Console.WriteLine($"fix: {error.Message}");
+        return 1;
+    }
 }
 
 static int Install(string binary, string metadata, string output)
@@ -76,7 +90,7 @@ static int Install(string binary, string metadata, string output)
     try
     {
         il2cpp = new Il2Cpp(File.ReadAllBytes(binary), File.ReadAllBytes(metadata));
-        il2cpp.Load("Assembly-CSharp.dll", "UnityEngine.CoreModule.dll");
+        il2cpp.Load(Game, Engine);
     }
     catch (Exception error)
     {
@@ -84,30 +98,15 @@ static int Install(string binary, string metadata, string output)
         return 1;
     }
 
-    uint? Resolve(string type, string method) =>
-        Enumerable.Range(0, 16).Select(n => il2cpp.Find(type, method, n)).FirstOrDefault(r => r is not null);
-
-    var sites = new List<Hook.Site>();
-    foreach (var (flag, type, method, ret) in Features.Toggles)
+    if (Framework.Install(il2cpp, line => Console.WriteLine($"install: {line}")) is not { } installed)
     {
-        if (Resolve(type, method) is uint rva && !il2cpp.Shared(rva)) sites.Add(new Hook.Site(Hook.Kind.Toggle, flag, rva, (byte)(ret ?? 0)));
-        else Console.WriteLine($"install: toggle {type}::{method} not found or shared, skipped");
+        Console.WriteLine("install: nothing to do");
+        return 3;
     }
-    foreach (var (ev, type, method) in Features.Hooks)
-    {
-        if (Resolve(type, method) is uint rva && !il2cpp.Shared(rva)) sites.Add(new Hook.Site(Hook.Kind.Event, ev, rva, 0));
-        else Console.WriteLine($"install: hook {type}::{method} not found or shared, skipped");
-    }
-    if (sites.Count == 0) { Console.WriteLine("install: nothing to do"); return 3; }
-
-    var pe = new Pe(il2cpp.Binary);
-    var iat = Loader.InjectImport(pe, "okmod.dll", ["okmod_flag", "okmod_paramf", "okmod_gate", "okmod_pump", "okmod_event"]);
-    List<Hook.Site> applied = Hook.Apply(pe, iat["okmod_flag"], iat["okmod_event"], sites);
-
-    File.WriteAllBytes(output, pe.Bytes);
-    File.WriteAllLines(output + ".sites", applied.Select(a => $"{a.Rva:X} {a.Kind} {a.Name} {a.Return}"));
-    foreach (Hook.Site a in applied) Console.WriteLine($"install: {a.Kind} {a.Name} @ {a.Rva:X}");
-    Console.WriteLine($"install: okmod loader + {applied.Count} detours");
+    File.WriteAllBytes(output, installed.Binary);
+    File.WriteAllLines(output + ".sites", installed.Sites.Select(a => $"{a.Rva:X} {a.Kind} {a.Name} {a.Return}"));
+    foreach (Hook.Site a in installed.Sites) Console.WriteLine($"install: {a.Kind} {a.Name} @ {a.Rva:X}");
+    Console.WriteLine($"install: okmod loader + {installed.Sites.Count} detours");
     return 0;
 }
 
@@ -135,7 +134,7 @@ static int InjectLoader(string input, string output)
     try
     {
         var pe = new Pe(File.ReadAllBytes(input));
-        Loader.InjectImport(pe, "okmod.dll", ["okmod_flag", "okmod_paramf", "okmod_gate", "okmod_pump"]);
+        Loader.InjectImport(pe, Framework.Library, ["okmod_flag", "okmod_paramf", "okmod_gate", "okmod_pump"]);
         File.WriteAllBytes(output, pe.Bytes);
         Console.WriteLine($"loader: added okmod.dll import, wrote {output} ({pe.Bytes.Length} bytes)");
         return 0;

@@ -1,0 +1,34 @@
+namespace OpenKogama.Mods.Patches;
+
+public static class Framework
+{
+    public const string Library = "okmod.dll";
+    const int MaxParameters = 16;
+    static readonly string[] Exports = ["okmod_flag", "okmod_paramf", "okmod_gate", "okmod_pump", "okmod_event"];
+
+    public sealed record Installed(byte[] Binary, List<Hook.Site> Sites);
+
+    public static Installed? Install(Il2Cpp il2cpp, Action<string> log)
+    {
+        uint? Resolve(string type, string method) =>
+            Enumerable.Range(0, MaxParameters).Select(parameters => il2cpp.Find(type, method, parameters)).FirstOrDefault(rva => rva is not null);
+
+        var sites = new List<Hook.Site>();
+        foreach (var (flag, type, method, ret) in Features.Toggles)
+        {
+            if (Resolve(type, method) is uint rva && !il2cpp.Shared(rva)) sites.Add(new Hook.Site(Hook.Kind.Toggle, flag, rva, (byte)(ret ?? 0)));
+            else log($"toggle {type}::{method} not found or shared, skipped");
+        }
+        foreach (var (name, type, method) in Features.Hooks)
+        {
+            if (Resolve(type, method) is uint rva && !il2cpp.Shared(rva)) sites.Add(new Hook.Site(Hook.Kind.Event, name, rva, 0));
+            else log($"hook {type}::{method} not found or shared, skipped");
+        }
+        if (sites.Count == 0) return null;
+
+        var pe = new Pe(il2cpp.Binary);
+        Dictionary<string, uint> iat = Loader.InjectImport(pe, Library, Exports);
+        List<Hook.Site> applied = Hook.Apply(pe, iat["okmod_flag"], iat["okmod_event"], sites, log);
+        return new Installed(pe.Bytes, applied);
+    }
+}

@@ -21,7 +21,7 @@ public static class Hook
             if (x86 && s.Kind == Kind.Event) { log($"detours: x86 event stub not written yet, skipping {s.Name}"); continue; }
             int raw = pe.Rva2Raw(s.Rva);
             int steal = X64.StealLength(pe.Bytes, raw, JmpBack, x86);
-            if (steal == 0 || pe.Relocations(s.Rva, steal, false)) continue;
+            if (steal == 0 || pe.Relocations(s.Rva, steal, false)) { log($"detours: cannot move the start of {s.Name} at {s.Rva:X}, skipping it"); continue; }
             plan.Add((s, steal, pe.Bytes[raw..(raw + steal)]));
         }
         if (plan.Count == 0) return [];
@@ -85,7 +85,7 @@ public static class Hook
         code.AddRange([0x41, 0x59, 0x41, 0x58, 0x5A, 0x59]);
         code.AddRange([0x85, 0xC0, 0x74, 0x03]);
         code.AddRange([0xB0, s.Return, 0xC3]);
-        code.AddRange(stolen);
+        code.AddRange(X64.Relocate(stolen, s.Rva, a + TogglePrefix));
         code.Add(0xE9); I32(code, s.Rva + (uint)steal - (a + (uint)(TogglePrefix + steal) + JmpBack));
     }
 
@@ -132,7 +132,7 @@ public static class Hook
         code.AddRange([0x49, 0x8B, 0xC2]);
         code.AddRange([0x48, 0x83, 0xC4, 0x68, 0xC3]);
         code.AddRange([0x48, 0x83, 0xC4, 0x68]);
-        code.AddRange(stolen);
+        code.AddRange(X64.Relocate(stolen, s.Rva, a + EventPrefix));
         code.Add(0xE9); I32(code, s.Rva + (uint)steal - (a + (uint)(EventPrefix + steal) + JmpBack));
     }
 }

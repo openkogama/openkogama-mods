@@ -84,6 +84,22 @@ int main(int argc, char **argv) {
     check(cancelled2 == 1, "event cancelled when arg1 set");
     check(result2 == 7, "event returned the result");
 
+    api->on("ev.stack", [](ok_call *c, void *u) {
+        const OkMod *a = (const OkMod *)u;
+        a->set_arg_int(c, 8, a->arg_int(c, 8) * 2);
+    }, (void *)api);
+
+    int64_t frame[18] = {};
+    frame[14] = 21;
+    frame[15] = 5;
+    run_event("ev.stack", frame, 8, nullptr);
+    check(frame[14] == 42, "event changed the first stack argument");
+    check(frame[15] == 5, "event left the other stack slots alone");
+
+    int unboxed = 0;
+    check(api->field_ptr(0, "Missing", "field") == nullptr, "no field pointer without a game");
+    check(api->unbox(0, &unboxed, sizeof(unboxed)) == 0, "nothing to unbox without a game");
+
     if (argc > 1) {
         int loaded = load_mods(argv[1]);
         check(loaded >= 1, "loaded the hello mod");
@@ -111,7 +127,7 @@ int main(int argc, char **argv) {
         check(delta.x == 5, "buildtools left the delta alone when off");
 
         float one = 1.0f;
-        int64_t proto[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        int64_t proto[18] = {};
         memcpy(&proto[6], &one, 4);
         api->flag_set("model_scale", 1);
         api->param_set_num("model_scale_value", 4.0);

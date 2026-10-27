@@ -2,7 +2,7 @@ namespace OpenKogama.Mods.Patches;
 
 public static class X64
 {
-    public readonly record struct Insn(int Length, bool RipRelative, bool RelBranch);
+    public readonly record struct Insn(int Length, bool RipRelative, bool RelBranch, int Displacement = 0);
 
     public static Insn Decode(byte[] code, int at, bool x86 = false)
     {
@@ -29,10 +29,7 @@ public static class X64
             if (op2 >= 0x80 && op2 <= 0x8F) return new Insn(p - at + 4, false, true);
 
             if (op2 is 0xB6 or 0xB7 or 0xBE or 0xBF or 0xAF or (>= 0x90 and <= 0x9F) or 0x10 or 0x11 or 0x28 or 0x29 or 0x57 or 0x1E)
-            {
-                var m = ModRM(code, p);
-                return new Insn(p + m.Len - at, m.Rip, false);
-            }
+                return WithModRM(code, at, p, 0);
             return new Insn(0, false, false);
         }
 
@@ -62,41 +59,26 @@ public static class X64
             case 0x08: case 0x09: case 0x0A: case 0x0B:
             case 0x38: case 0x39: case 0x3A: case 0x3B:
             case 0x8D:
-            {
-                var m = ModRM(code, p);
-                return new Insn(p + m.Len - at, m.Rip, false);
-            }
-            case 0x80: case 0x82: case 0x83:
-            {
-                var m = ModRM(code, p);
-                return new Insn(p + m.Len + 1 - at, m.Rip, false);
-            }
-            case 0x81:
-            {
-                var m = ModRM(code, p);
-                return new Insn(p + m.Len + (opsize ? 2 : 4) - at, m.Rip, false);
-            }
-            case 0xC6:
-            {
-                var m = ModRM(code, p);
-                return new Insn(p + m.Len + 1 - at, m.Rip, false);
-            }
-            case 0xC7:
-            {
-                var m = ModRM(code, p);
-                return new Insn(p + m.Len + (opsize ? 2 : 4) - at, m.Rip, false);
-            }
             case 0xFF:
-            {
-                var m = ModRM(code, p);
-                return new Insn(p + m.Len - at, m.Rip, false);
-            }
+                return WithModRM(code, at, p, 0);
+            case 0x80: case 0x82: case 0x83:
+            case 0xC6:
+                return WithModRM(code, at, p, 1);
+            case 0x81:
+            case 0xC7:
+                return WithModRM(code, at, p, opsize ? 2 : 4);
             default:
                 return new Insn(0, false, false);
         }
     }
 
     readonly record struct Mod(int Len, bool Rip);
+
+    static Insn WithModRM(byte[] code, int at, int p, int immediate)
+    {
+        var m = ModRM(code, p);
+        return new Insn(p + m.Len + immediate - at, m.Rip, false, m.Rip ? p + 1 - at : 0);
+    }
 
     static Mod ModRM(byte[] code, int pos)
     {
@@ -124,9 +106,26 @@ public static class X64
         while (taken < need)
         {
             Insn insn = Decode(code, at + taken, x86);
-            if (insn.Length == 0 || insn.RipRelative || insn.RelBranch) return 0;
+            if (insn.Length == 0 || insn.RelBranch || (insn.RipRelative && x86)) return 0;
             taken += insn.Length;
         }
         return taken;
+    }
+
+    public static byte[] Relocate(byte[] code, uint from, uint to)
+    {
+        byte[] moved = [.. code];
+        for (int at = 0; at < moved.Length;)
+        {
+            Insn insn = Decode(moved, at);
+            if (insn.Length == 0) break;
+            if (insn.RipRelative)
+            {
+                long target = BitConverter.ToInt32(moved, at + insn.Displacement) + (long)from - to;
+                BitConverter.GetBytes((int)target).CopyTo(moved, at + insn.Displacement);
+            }
+            at += insn.Length;
+        }
+        return moved;
     }
 }

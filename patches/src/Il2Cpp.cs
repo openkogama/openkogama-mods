@@ -10,7 +10,9 @@ public sealed class Il2Cpp
     const int TypeSize = 88;
     const int ImageSize = 40;
     const int MaxMethods = 1_000_000;
+    const int MaxTypes = 4_000_000;
     const int NoGenericContainer = -1;
+    const uint ByRef = 1u << 29;
 
     readonly byte[] _metadata;
     readonly ulong _imageBase;
@@ -18,6 +20,9 @@ public sealed class Il2Cpp
     readonly Dictionary<(string Module, string Type, string Method, int Parameters), uint> _rvas = [];
     readonly Dictionary<(string Module, string Type, string Method, int Parameters), string[]> _params = [];
     readonly Dictionary<(string Module, string Type, string Method, int Parameters), bool> _static = [];
+    readonly Dictionary<(string Module, string Type, string Method), List<(uint Token, int[] Types)>> _signatures = [];
+    ulong[]? _types;
+    bool _typesRead;
     readonly Dictionary<string, ulong[]> _pointers = [];
     readonly Dictionary<int, string> _typeNames = [];
     readonly Dictionary<int, int> _parent = [];
@@ -71,6 +76,32 @@ public sealed class Il2Cpp
         _rvas.TryGetValue((module, type, method, parameters), out uint rva) ? rva : null;
 
     public uint? Find(string type, string method, int parameters) => Find(Game, type, method, parameters);
+
+    public uint? Find(string module, string type, string method, IReadOnlyList<string> parameterTypes)
+    {
+        if (!_signatures.TryGetValue((module, type, method), out var candidates) || !_pointers.TryGetValue(module, out ulong[]? pointers)) return null;
+        uint? found = null;
+        foreach ((uint token, int[] types) in candidates)
+        {
+            if (types.Length != parameterTypes.Count || !types.Select(TypeName).SequenceEqual(parameterTypes)) continue;
+            ulong va = pointers[(token & 0xFFFFFF) - 1];
+            if (found is not null || va == 0) return null;
+            found = (uint)(va - _imageBase);
+        }
+        return found;
+    }
+
+    public uint? Find(string type, string method, IReadOnlyList<string> parameterTypes) => Find(Game, type, method, parameterTypes);
+
+    public IEnumerable<(string Module, string Type, string Method, string[] Types, uint Rva)> Signatures(string module)
+    {
+        if (!_pointers.TryGetValue(module, out ulong[]? pointers)) yield break;
+        foreach (((string m, string type, string method), var candidates) in _signatures)
+            if (m == module)
+                foreach ((uint token, int[] types) in candidates)
+                    if (pointers[(token & 0xFFFFFF) - 1] is ulong va and not 0)
+                        yield return (m, type, method, [.. types.Select(TypeName)], (uint)(va - _imageBase));
+    }
     public uint? FindEngine(string type, string method, int parameters) => Find(Engine, type, method, parameters);
 
     public IEnumerable<(string Type, uint Rva)> Named(string method, int parameters) =>
@@ -179,8 +210,11 @@ public sealed class Il2Cpp
                     if (Int(definition + methodSize - 16) != NoGenericContainer) continue;
                     int parameterCount = BitConverter.ToUInt16(_metadata, definition + methodSize - 2);
                     var key = (typeName, Name(Int(definition)), parameterCount);
-                    if (!tokens.TryAdd(key, token)) { overloaded.Add(key); continue; }
                     int parameterStart = Int(definition + parameterStartAt);
+                    if (!_signatures.TryGetValue((module, key.Item1, key.Item2), out var signatures))
+                        _signatures[(module, key.Item1, key.Item2)] = signatures = [];
+                    signatures.Add((token, [.. Enumerable.Range(0, parameterCount).Select(i => Int(parameters + (parameterStart + i) * 12 + 8))]));
+                    if (!tokens.TryAdd(key, token)) { overloaded.Add(key); continue; }
                     names[key] = [.. Enumerable.Range(0, parameterCount).Select(i => Name(Int(parameters + (parameterStart + i) * 12)))];
                     statics[key] = (BitConverter.ToUInt16(_metadata, definition + methodSize - 8) & 0x10) != 0;
                 }
@@ -191,6 +225,75 @@ public sealed class Il2Cpp
             return (tokens, count);
         }
         throw new InvalidDataException($"GameAssembly.dll has no {module}");
+    }
+
+    string TypeName(int index)
+    {
+        ulong[]? types = TypeTable();
+        return types is not null && index >= 0 && index < types.Length ? TypeNameAt(types[index]) : "?";
+    }
+
+    string TypeNameAt(ulong va)
+    {
+        if (TryOffset(va) is not int at) return "?";
+        ulong data = Pointer(at);
+        uint bits = BitConverter.ToUInt32(Binary, at + (Is64Bit ? 8 : 4));
+        int definitions = BitConverter.ToInt32(_metadata, 164) / TypeSize;
+        string name = ((bits >> 16) & 0xFF) switch
+        {
+            0x01 => "void",
+            0x02 => "bool",
+            0x03 => "char",
+            0x04 => "sbyte",
+            0x05 => "byte",
+            0x06 => "short",
+            0x07 => "ushort",
+            0x08 => "int",
+            0x09 => "uint",
+            0x0A => "long",
+            0x0B => "ulong",
+            0x0C => "float",
+            0x0D => "double",
+            0x0E => "string",
+            0x11 or 0x12 when (long)data < definitions => Simple(FullName((int)data)),
+            0x15 when TryOffset(data) is int generic => TypeNameAt(Pointer(generic)),
+            0x18 => "IntPtr",
+            0x19 => "UIntPtr",
+            0x1C => "object",
+            0x1D => TypeNameAt(data) + "[]",
+            uint kind => $"#{kind:X2}"
+        };
+        return (bits & ByRef) != 0 ? "ref " + name : name;
+    }
+
+    static string Simple(string name) => name[(name.LastIndexOf('.') + 1)..];
+
+    ulong[]? TypeTable()
+    {
+        if (_typesRead) return _types;
+        _typesRead = true;
+        ulong definitions = (ulong)(BitConverter.ToInt32(_metadata, 164) / TypeSize);
+        int size = Is64Bit ? 8 : 4;
+        for (int at = 10 * size; at + 4 * size <= Binary.Length; at += size)
+        {
+            if (Pointer(at) != definitions || Pointer(at + 2 * size) != definitions) continue;
+            if (TryOffset(Pointer(at + size)) is null || TryOffset(Pointer(at + 3 * size)) is null) continue;
+            int registration = at - 10 * size;
+            ulong count = Pointer(registration + 6 * size);
+            if (count is 0 or > MaxTypes || TryOffset(Pointer(registration + 7 * size)) is not int table || table + (long)count * size > Binary.Length) continue;
+            _types = [.. Enumerable.Range(0, (int)count).Select(i => Pointer(table + i * size))];
+            break;
+        }
+        return _types;
+    }
+
+    int? TryOffset(ulong va)
+    {
+        if (va < _imageBase) return null;
+        ulong rva = va - _imageBase;
+        foreach ((uint start, uint size, uint raw) in _sections)
+            if (rva >= start && rva < start + size && raw + (rva - start) < (ulong)Binary.Length) return (int)(rva - start + raw);
+        return null;
     }
 
     string Name(int index)

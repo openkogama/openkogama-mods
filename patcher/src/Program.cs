@@ -8,6 +8,8 @@ if (args is ["resolve", string binary, string metadata, .. var symbols])
     return Resolve(binary, metadata, symbols);
 if (args is ["dump", string dumpBinary, string dumpMetadata, .. var filter])
     return Dump(dumpBinary, dumpMetadata, filter.FirstOrDefault());
+if (args is ["signatures", string sigBinary, string sigMetadata, .. var sigFilter])
+    return Signatures(sigBinary, sigMetadata, sigFilter.FirstOrDefault());
 if (args is ["header", string headerMetadata])
     return Header(headerMetadata);
 if (args is ["selftest"])
@@ -28,9 +30,12 @@ if (args is ["patch", "install", string tBinary, string tMetadata, string tOut])
     return Install(tBinary, tMetadata, tOut);
 if (args is ["patch", "mono", string mBinary, string mShim, string mOut])
     return InstallMono(mBinary, mShim, mOut);
+if (args is ["patch", "content", string cData, string cContent, string cOut])
+    return PatchContent(cData, cContent, cOut);
 
 Console.WriteLine("usage: okpatch resolve <GameAssembly.dll> <global-metadata.dat> [module!Type::Method/params ...]");
 Console.WriteLine("       okpatch dump <GameAssembly.dll> <global-metadata.dat> [substring]");
+Console.WriteLine("       okpatch signatures <GameAssembly.dll> <global-metadata.dat> [substring]");
 Console.WriteLine("       okpatch header <global-metadata.dat>");
 Console.WriteLine("       okpatch params <GameAssembly.dll> <global-metadata.dat> <Type::Method[/N] ...>");
 Console.WriteLine("       okpatch patch loader <GameAssembly.dll> <out>");
@@ -38,6 +43,7 @@ Console.WriteLine($"       okpatch patch fix <GameAssembly.dll> <global-metadata
 Console.WriteLine($"       okpatch patch fix <Assembly-CSharp.dll> <out> [{string.Join(" ", Fixes.All[..^1])}]");
 Console.WriteLine("       okpatch patch install <GameAssembly.dll> <global-metadata.dat> <out>");
 Console.WriteLine("       okpatch patch mono <Assembly-CSharp.dll> <OkModShim.dll> <out>");
+Console.WriteLine("       okpatch patch content <data.unity3d or sharedassets0.assets> <content.json> <out>");
 Console.WriteLine("  a symbol without a module defaults to Assembly-CSharp.dll; without /params, any count matches");
 return 2;
 
@@ -108,6 +114,24 @@ static int Install(string binary, string metadata, string output)
     foreach (Hook.Site a in installed.Sites) Console.WriteLine($"install: {a.Kind} {a.Name} @ {a.Rva:X}");
     Console.WriteLine($"install: okmod loader + {installed.Sites.Count} detours");
     return 0;
+}
+
+static int PatchContent(string data, string content, string output)
+{
+    try
+    {
+        ServerContent served = ServerContent.FromJson(File.ReadAllText(content));
+        byte[] patched = ContentPatch.Apply(File.ReadAllBytes(data), served, out List<string> themes);
+        if (served.Sounds.Count == 0 && themes.Count == 0) { Console.WriteLine("content: nothing changed"); return 3; }
+        File.WriteAllBytes(output, patched);
+        Console.WriteLine($"content: {served.Sounds.Count} sounds added, themes {(themes.Count > 0 ? string.Join(", ", themes) : "unchanged")}");
+        return 0;
+    }
+    catch (Exception error)
+    {
+        Console.WriteLine($"content: {error.Message}");
+        return 1;
+    }
 }
 
 static int InstallMono(string input, string shim, string output)
@@ -282,6 +306,26 @@ static int Dump(string binary, string metadata, string? filter)
         .Where(e => filter is null || e.Type.Contains(filter, StringComparison.OrdinalIgnoreCase))
         .OrderBy(e => e.Type).ThenBy(e => e.Method))
         Console.WriteLine($"{module}!{type}::{method}/{parameters} {rva:X}");
+    return 0;
+}
+
+static int Signatures(string binary, string metadata, string? filter)
+{
+    Il2Cpp il2cpp;
+    try
+    {
+        il2cpp = new Il2Cpp(File.ReadAllBytes(binary), File.ReadAllBytes(metadata));
+        il2cpp.Load(Game, Engine);
+    }
+    catch (Exception error)
+    {
+        Console.WriteLine($"signatures: {error.Message}");
+        return 1;
+    }
+    foreach ((string module, string type, string method, string[] types, uint rva) in il2cpp.Signatures(Game).Concat(il2cpp.Signatures(Engine))
+        .Where(e => filter is null || e.Type.Contains(filter, StringComparison.OrdinalIgnoreCase))
+        .OrderBy(e => e.Type).ThenBy(e => e.Method))
+        Console.WriteLine($"{module}!{type}::{method}({string.Join(",", types)}) {rva:X}");
     return 0;
 }
 

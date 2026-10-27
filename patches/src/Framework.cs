@@ -10,8 +10,13 @@ public static class Framework
 
     public static Installed? Install(Il2Cpp il2cpp, Action<string> log)
     {
-        uint? Resolve(string type, string method) =>
-            Enumerable.Range(0, MaxParameters).Select(parameters => il2cpp.Find(type, method, parameters)).FirstOrDefault(rva => rva is not null);
+        uint? Resolve(string type, string method)
+        {
+            int open = method.IndexOf('(');
+            if (open >= 0)
+                return il2cpp.Find(type, method[..open], method[(open + 1)..^1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            return Enumerable.Range(0, MaxParameters).Select(parameters => il2cpp.Find(type, method, parameters)).FirstOrDefault(rva => rva is not null);
+        }
 
         var sites = new List<Hook.Site>();
         foreach (var (flag, type, method, ret) in Features.Toggles)

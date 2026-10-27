@@ -21,6 +21,13 @@ struct Runtime {
     int64_t (*call_obj_i)(ok_object self, const char *type, const char *method);
     int64_t (*invoke)(ok_object self, const char *type, const char *method,
                       int argc, const int64_t *args, const char *argtypes, char ret);
+    double (*field_num)(ok_object self, const char *type, const char *field, double fallback);
+    int (*set_field_num)(ok_object self, const char *type, const char *field, double value);
+    ok_object (*field_obj)(ok_object self, const char *type, const char *field);
+    void *(*field_ptr)(ok_object self, const char *type, const char *field);
+    int (*unbox)(ok_object boxed, void *out, int size);
+    int64_t (*invoke_exact)(ok_object self, const char *type, const char *method,
+                            int argc, const int64_t *args, const char *argtypes, char ret);
 };
 
 void set_runtime(const Runtime *r);

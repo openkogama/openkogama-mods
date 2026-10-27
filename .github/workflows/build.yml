@@ -68,7 +68,17 @@ jobs:
           $game = (Get-ChildItem client -Recurse -Filter GameAssembly.dll | Select-Object -First 1).FullName
           $meta = (Get-ChildItem client -Recurse -Filter global-metadata.dat | Select-Object -First 1).FullName
           $run = "patcher/OpenKogama.Mods.Patcher.csproj"
-          dotnet run --project $run -c Release --no-build -- patch fix $game $meta fixed.dll world-switch tcp
+          dotnet run --project $run -c Release --no-build -- patch fix $game $meta fixed.dll world-switch tcp teleport
+
+      - name: add server content
+        shell: pwsh
+        run: |
+          $data = (Get-ChildItem client -Recurse -Filter data.unity3d | Select-Object -First 1).FullName
+          $run = "patcher/OpenKogama.Mods.Patcher.csproj"
+          Set-Content content.json '{"sounds":[{"url":"http://127.0.0.1:8080/one.unity3d","name":"One","group":"Ambient"}],"themes":[{"name":"Cloudy","base":"Cloudy","folder":"cloudy","files":{"clouds":"clouds.unity3d"},"textures":{"clouds":"http://127.0.0.1:8080/clouds.unity3d"}},{"name":"Test Sky","base":"Cloudy","title":"Test Sky","folder":"cloudy","files":{"clouds":"clouds.unity3d"},"settings":{"useDayNightCycle":true}}]}'
+          $out = dotnet run --project $run -c Release --no-build -- patch content $data content.json content.unity3d | Out-String
+          Write-Output $out
+          if ($out -notmatch "1 sounds added, themes Cloudy, Test Sky") { throw "server content did not go into data.unity3d" }
 
       - name: install framework patches
         shell: pwsh
@@ -126,6 +136,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          path: openkogama-mods
       - uses: actions/checkout@v4
         with:
           repository: openkogama/openkogama-server
@@ -222,6 +235,9 @@ jobs:
           $il = dotnet run --project $run -c Release --no-build -- monoil patched-cs.dll "ModelingBoxCountConstraint::CanAddCubeAt" | Out-String
           Write-Output $il
           if ($il -notmatch "OpenKogama.Mods.OkMod::Flag" -or $il -notmatch "OkModShim: True") { throw "mono IL toggle not injected" }
+          $fixed = dotnet run --project $run -c Release --no-build -- patch fix $asm fixed-cs.dll colossus-laser world-switch tcp teleport | Out-String
+          Write-Output $fixed
+          if ($fixed -notmatch "applied world-switch" -or $fixed -notmatch "applied teleport") { throw "mono client fixes not applied" }
 
   core:
     runs-on: windows-latest

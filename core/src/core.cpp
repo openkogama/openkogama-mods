@@ -144,6 +144,24 @@ int64_t call_obj_i(ok_object self, const char *type, const char *method) { retur
 int64_t invoke(ok_object self, const char *type, const char *method, int argc, const int64_t *args, const char *argtypes, char ret) {
     return runtime() ? runtime()->invoke(self, type, method, argc, args, argtypes, ret) : 0;
 }
+double field_num(ok_object self, const char *type, const char *field, double fallback) {
+    return runtime() ? runtime()->field_num(self, type, field, fallback) : fallback;
+}
+int set_field_num(ok_object self, const char *type, const char *field, double value) {
+    return runtime() ? runtime()->set_field_num(self, type, field, value) : 0;
+}
+ok_object field_obj(ok_object self, const char *type, const char *field) {
+    return runtime() ? runtime()->field_obj(self, type, field) : 0;
+}
+void *field_ptr(ok_object self, const char *type, const char *field) {
+    return runtime() ? runtime()->field_ptr(self, type, field) : nullptr;
+}
+int unbox(ok_object boxed, void *out, int size) {
+    return runtime() ? runtime()->unbox(boxed, out, size) : 0;
+}
+int64_t invoke_exact(ok_object self, const char *type, const char *method, int argc, const int64_t *args, const char *argtypes, char ret) {
+    return runtime() ? runtime()->invoke_exact(self, type, method, argc, args, argtypes, ret) : 0;
+}
 
 void defer(void (*fn)(void *), void *user) {
     if (!fn) return;
@@ -172,6 +190,12 @@ const OkMod g_api = {
     call_static_obj,
     call_obj_i,
     invoke,
+    field_num,
+    set_field_num,
+    field_obj,
+    field_ptr,
+    unbox,
+    invoke_exact,
 };
 
 #if defined(_WIN32)
@@ -230,6 +254,10 @@ int64_t call_result_int(ok_call *c, int64_t fallback) { return c && c->has_resul
 double call_result_num(ok_call *c, double fallback) { return c && c->has_result ? (c->result.kind == INT ? (double)c->result.i : c->result.n) : fallback; }
 void call_end(ok_call *c) { delete c; }
 
+constexpr int RegisterSlots = 8;
+constexpr int StackSlots = 4;
+constexpr int StackStart = 14;
+
 int run_gate(const char *hook) {
     ok_call *c = call_begin();
     dispatch(hook, c);
@@ -240,9 +268,15 @@ int run_gate(const char *hook) {
 
 int run_event(const char *hook, int64_t *args, int argc, int64_t *result) {
     ok_call *c = call_begin();
+    int stacked = args && argc == RegisterSlots ? StackSlots : 0;
     for (int i = 0; i < argc; i++) call_push_int(c, args ? args[i] : 0);
+    for (int i = 0; i < stacked; i++) call_push_int(c, args[StackStart + i]);
     dispatch(hook, c);
     for (int i = 0; i < argc && args; i++) args[i] = call_arg_int(c, i);
+    for (int i = 0; i < stacked; i++) {
+        int64_t value = call_arg_int(c, argc + i);
+        if (value != args[StackStart + i]) args[StackStart + i] = value;
+    }
     if (result) *result = call_result_int(c, 0);
     int cancelled = call_cancelled(c);
     call_end(c);

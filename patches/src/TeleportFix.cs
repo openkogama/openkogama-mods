@@ -48,6 +48,10 @@ public static class TeleportFix
             || handler.Body.Instructions.FirstOrDefault(instruction => instruction.OpCode == OpCodes.Stfld && instruction.Operand is FieldReference { Name: "packageType" } field
                 && field.DeclaringType.FullName == TransformPackage) is not { Next: { } after })
             return false;
+        MethodDefinition? entering = Inherited(avatar, method => method.Name == "get_IsEnteringVehicle" && !method.HasParameters);
+        MethodDefinition? seated = Inherited(avatar, method => method.Name == "get_IsSeated" && !method.HasParameters);
+        MethodDefinition? leave = avatar.Methods.FirstOrDefault(method => method.Name == "LeaveVehicle" && !method.IsStatic
+            && method.Parameters is [] or [{ ParameterType.MetadataType: MetadataType.Boolean }]);
         TypeDefinition? builder = module.GetType(BuildAvatar);
         TypeDefinition? client = module.GetType(WorldObjectClient);
         MethodDefinition? moveTo = client?.Methods.FirstOrDefault(method => method.Name == "set_WorldPosition" && method.Parameters.Count == 1);
@@ -78,6 +82,23 @@ public static class TeleportFix
         il.Emit(OpCodes.Stloc, local);
         il.Emit(OpCodes.Ldloc, local);
         il.Emit(OpCodes.Brfalse, building);
+        if (entering is not null)
+        {
+            il.Emit(OpCodes.Ldloc, local);
+            il.Emit(OpCodes.Callvirt, entering);
+            il.Emit(OpCodes.Brtrue, refuse);
+        }
+        if (seated is not null && leave is not null)
+        {
+            Instruction standing = il.Create(OpCodes.Nop);
+            il.Emit(OpCodes.Ldloc, local);
+            il.Emit(OpCodes.Callvirt, seated);
+            il.Emit(OpCodes.Brfalse, standing);
+            il.Emit(OpCodes.Ldloc, local);
+            if (leave.HasParameters) il.Emit(OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Callvirt, leave);
+            il.Append(standing);
+        }
         il.Emit(OpCodes.Ldloc, local);
         il.Emit(OpCodes.Ldarg_2);
         il.Emit(OpCodes.Ldfld, position);
@@ -120,7 +141,14 @@ public static class TeleportFix
         return true;
     }
 
-    sealed record TeleportTargets(uint Manager, uint Find, uint SetTransform, uint MoveTo, uint TurnTo, uint Add);
+    static MethodDefinition? Inherited(TypeDefinition type, Func<MethodDefinition, bool> match)
+    {
+        for (TypeDefinition? at = type; at is not null; at = at.BaseType as TypeDefinition)
+            if (at.Methods.FirstOrDefault(match) is { } found) return found;
+        return null;
+    }
+
+    sealed record TeleportTargets(uint Manager, uint Find, uint SetTransform, uint MoveTo, uint TurnTo, uint Add, uint? Entering, uint? Seated, uint? Leave);
 
     public static bool Apply(Il2Cpp il2cpp, Action<string> log)
     {
@@ -151,14 +179,27 @@ public static class TeleportFix
             return false;
         }
 
-        var targets = new TeleportTargets(manager, find, setTransform, moveTo, turnTo, add);
-        int size = TeleportCode(wide, 0, targets).Count;
-        if (Cave(il2cpp, size) is not uint cave)
+        var targets = new TeleportTargets(manager, find, setTransform, moveTo, turnTo, add,
+            il2cpp.Find(LocalAvatar, "get_IsEnteringVehicle", 0),
+            il2cpp.Find("MVAvatar", "get_IsSeated", 0) ?? il2cpp.Find(LocalAvatar, "get_IsSeated", 0),
+            il2cpp.Find(LocalAvatar, "LeaveVehicle", 1));
+        uint? leaving = null;
+        if (targets.Seated is not null && targets.Leave is not null
+            && Cave(il2cpp, TeleportCode(wide, 0, targets, 0).Count) is uint main
+            && Cave(il2cpp, VehicleCode(wide, 0, targets).Count, main) is uint helper)
+        {
+            leaving = helper;
+            List<byte> leave = VehicleCode(wide, helper, targets);
+            leave.CopyTo(image, il2cpp.Offset(helper));
+            il2cpp.Unrelocate(helper, leave.Count);
+        }
+        int size = TeleportCode(wide, 0, targets, leaving).Count;
+        if (Cave(il2cpp, size, leaving) is not uint cave)
         {
             log($"{Fixes.Teleport}: no unused method has room for {size} bytes, left as it is");
             return false;
         }
-        List<byte> code = TeleportCode(wide, cave, targets);
+        List<byte> code = TeleportCode(wide, cave, targets, leaving);
         code.CopyTo(image, il2cpp.Offset(cave));
         il2cpp.Unrelocate(cave, code.Count);
         uint call = (uint)(handler + (site - start));
@@ -167,17 +208,17 @@ public static class TeleportFix
         return true;
     }
 
-    static uint? Cave(Il2Cpp il2cpp, int size)
+    static uint? Cave(Il2Cpp il2cpp, int size, uint? taken = null)
     {
         HashSet<uint> called = il2cpp.CallTargets();
         return Caves.SelectMany(name => il2cpp.Named(name, 0))
-            .Where(method => !il2cpp.Shared(method.Rva) && !called.Contains(method.Rva) && il2cpp.End(method.Rva) - method.Rva >= size)
+            .Where(method => method.Rva != taken && !il2cpp.Shared(method.Rva) && !called.Contains(method.Rva) && il2cpp.End(method.Rva) - method.Rva >= size)
             .OrderBy(method => method.Type, StringComparer.Ordinal)
             .Select(method => (uint?)method.Rva)
             .FirstOrDefault();
     }
 
-    static List<byte> TeleportCode(bool wide, uint cave, TeleportTargets targets)
+    static List<byte> TeleportCode(bool wide, uint cave, TeleportTargets targets, uint? leaving)
     {
         var code = new List<byte>();
         var jumps = new List<(int At, string Label)>();
@@ -242,6 +283,14 @@ public static class TeleportFix
             Branch([0x0F, Equal], Refused);
             code.AddRange([0x48, 0x8B, 0x08, 0x48, 0x8B, 0x49, ClassName64]);
             Named(LocalAvatar, Building);
+            if (leaving is uint vehicle)
+            {
+                code.AddRange([0x48, 0x89, 0x44, 0x24, 0x20, 0x48, 0x89, 0xC1]);
+                Relative(Call, vehicle);
+                code.AddRange([0x84, 0xC0]);
+                Branch([0x0F, NotEqual], Refused);
+                code.AddRange([0x48, 0x8B, 0x44, 0x24, 0x20]);
+            }
             code.AddRange([0x48, 0x89, 0xC1, 0x48, 0x8D, 0x57, Position64, 0x4C, 0x8D, 0x47, Rotation64, 0x45, 0x31, 0xC9]);
             Relative(Call, targets.SetTransform);
             Branch([Jump], Done);
@@ -271,6 +320,14 @@ public static class TeleportFix
             Branch([0x0F, Equal], Refused);
             code.AddRange([0x8B, 0x08, 0x8B, 0x49, ClassName32]);
             Named(LocalAvatar, Building);
+            if (leaving is uint vehicle)
+            {
+                code.AddRange([0x89, 0xC3, 0x53]);
+                Relative(Call, vehicle);
+                code.AddRange([0x83, 0xC4, 0x04, 0x84, 0xC0]);
+                Branch([0x0F, NotEqual], Refused);
+                code.AddRange([0x89, 0xD8]);
+            }
             code.AddRange([0x6A, 0x00]);
             for (int field = 3; field >= 0; field--) code.AddRange([0xFF, 0x77, (byte)(Rotation32 + field * 4)]);
             for (int field = 2; field >= 0; field--) code.AddRange([0xFF, 0x77, (byte)(Position32 + field * 4)]);
@@ -299,6 +356,83 @@ public static class TeleportFix
         {
             byte[] distance = BitConverter.GetBytes(labels[label] - (at + 4));
             for (int i = 0; i < 4; i++) code[at + i] = distance[i];
+        }
+        return code;
+    }
+
+    static List<byte> VehicleCode(bool wide, uint at, TeleportTargets targets)
+    {
+        var code = new List<byte>();
+        var jumps = new List<(int At, string Label)>();
+        var labels = new Dictionary<string, int>();
+        const string Busy = "busy", Free = "free", End = "end";
+
+        void Relative(byte opcode, uint target)
+        {
+            code.Add(opcode);
+            code.AddRange(BitConverter.GetBytes((int)(target - (at + code.Count + 4))));
+        }
+
+        void Branch(byte[] opcode, string label)
+        {
+            code.AddRange(opcode);
+            jumps.Add((code.Count, label));
+            code.AddRange([0, 0, 0, 0]);
+        }
+
+        if (wide)
+        {
+            code.AddRange([0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCB]);
+            if (targets.Entering is uint entering)
+            {
+                code.AddRange([0x48, 0x89, 0xD9, 0x31, 0xD2]);
+                Relative(Call, entering);
+                code.AddRange([0x84, 0xC0]);
+                Branch([0x0F, NotEqual], Busy);
+            }
+            code.AddRange([0x48, 0x89, 0xD9, 0x31, 0xD2]);
+            Relative(Call, targets.Seated!.Value);
+            code.AddRange([0x84, 0xC0]);
+            Branch([0x0F, Equal], Free);
+            code.AddRange([0x48, 0x89, 0xD9, 0x31, 0xD2, 0x45, 0x31, 0xC0]);
+            Relative(Call, targets.Leave!.Value);
+            labels[Free] = code.Count;
+            code.AddRange([0x31, 0xC0]);
+            Branch([Jump], End);
+            labels[Busy] = code.Count;
+            code.AddRange([0xB0, 0x01]);
+            labels[End] = code.Count;
+            code.AddRange([0x48, 0x83, 0xC4, 0x20, 0x5B, Return]);
+        }
+        else
+        {
+            code.AddRange([0x53, 0x8B, 0x5C, 0x24, 0x08]);
+            if (targets.Entering is uint entering)
+            {
+                code.AddRange([0x6A, 0x00, 0x53]);
+                Relative(Call, entering);
+                code.AddRange([0x83, 0xC4, 0x08, 0x84, 0xC0]);
+                Branch([0x0F, NotEqual], Busy);
+            }
+            code.AddRange([0x6A, 0x00, 0x53]);
+            Relative(Call, targets.Seated!.Value);
+            code.AddRange([0x83, 0xC4, 0x08, 0x84, 0xC0]);
+            Branch([0x0F, Equal], Free);
+            code.AddRange([0x6A, 0x00, 0x6A, 0x00, 0x53]);
+            Relative(Call, targets.Leave!.Value);
+            code.AddRange([0x83, 0xC4, 0x0C]);
+            labels[Free] = code.Count;
+            code.AddRange([0x31, 0xC0]);
+            Branch([Jump], End);
+            labels[Busy] = code.Count;
+            code.AddRange([0xB0, 0x01]);
+            labels[End] = code.Count;
+            code.AddRange([0x5B, Return]);
+        }
+        foreach ((int from, string label) in jumps)
+        {
+            byte[] distance = BitConverter.GetBytes(labels[label] - (from + 4));
+            for (int i = 0; i < 4; i++) code[from + i] = distance[i];
         }
         return code;
     }

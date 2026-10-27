@@ -45,6 +45,29 @@ add_library(tweaks SHARED ../mods/tweaks/tweaks.c)
 target_include_directories(tweaks PRIVATE ${CMAKE_SOURCE_DIR}/../include)
 set_target_properties(tweaks PROPERTIES PREFIX "" OUTPUT_NAME "tweaks")
 
+add_library(scrollzoom SHARED ../mods/scrollzoom/scrollzoom.c)
+target_include_directories(scrollzoom PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+set_target_properties(scrollzoom PROPERTIES PREFIX "" OUTPUT_NAME "scrollzoom")
+
+add_library(hideui SHARED ../mods/hideui/hideui.c)
+target_include_directories(hideui PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+set_target_properties(hideui PROPERTIES PREFIX "" OUTPUT_NAME "hideui")
+
+add_library(farview SHARED ../mods/farview/farview.c)
+target_include_directories(farview PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+set_target_properties(farview PROPERTIES PREFIX "" OUTPUT_NAME "farview")
+
+set(KOGAMASTUDIO ${CMAKE_SOURCE_DIR}/../mods/kogamastudio)
+file(GLOB KOGAMASTUDIO_SOURCES ${KOGAMASTUDIO}/src/*.cpp ${KOGAMASTUDIO}/imgui/*.cpp ${KOGAMASTUDIO}/imnodes/*.cpp)
+add_library(kogamastudio SHARED ${KOGAMASTUDIO_SOURCES})
+target_include_directories(kogamastudio PRIVATE ${CMAKE_SOURCE_DIR}/../include ${KOGAMASTUDIO} ${KOGAMASTUDIO}/src ${KOGAMASTUDIO}/imgui)
+set_target_properties(kogamastudio PROPERTIES PREFIX "" OUTPUT_NAME "kogamastudio" CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+target_compile_definitions(kogamastudio PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX)
+if(MSVC)
+    target_compile_options(kogamastudio PRIVATE /utf-8 /bigobj)
+endif()
+target_link_libraries(kogamastudio PRIVATE d3d11 dxgi dcomp dwmapi d3dcompiler winhttp comdlg32 shell32 ole32 user32 gdi32)
+
 # host test: drives the core with synthetic dispatches, no game needed
 add_executable(okhost_test test/host_test.cpp)
 target_link_libraries(okhost_test PRIVATE okmod_core)

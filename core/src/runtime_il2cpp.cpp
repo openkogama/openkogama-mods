@@ -44,6 +44,16 @@ struct Il2 {
     void *(*string_new)(const char *);
     int32_t (*class_value_size)(void *, uint32_t *);
     bool (*class_is_valuetype)(const void *);
+    void *(*array_new)(void *, uintptr_t);
+    uint32_t (*array_length)(void *);
+    const uint16_t *(*string_chars)(void *);
+    int32_t (*string_length)(void *);
+    void *(*class_get_fields)(void *, void **);
+    const char *(*field_get_name)(void *);
+    bool (*type_is_byref)(const void *);
+    bool (*method_is_generic)(const void *);
+    void *(*object_new)(void *);
+    int (*array_element_size)(const void *);
 };
 
 enum : int {
@@ -68,6 +78,7 @@ enum : int {
 };
 
 constexpr int FieldStatic = 0x10;
+constexpr size_t ArrayHeader = 4 * sizeof(void *);
 
 struct Field {
     void *owner;
@@ -120,7 +131,17 @@ bool ready() {
             && bind(h, il2.object_get_virtual_method, "il2cpp_object_get_virtual_method")
             && bind(h, il2.string_new, "il2cpp_string_new")
             && bind(h, il2.class_value_size, "il2cpp_class_value_size")
-            && bind(h, il2.class_is_valuetype, "il2cpp_class_is_valuetype");
+            && bind(h, il2.class_is_valuetype, "il2cpp_class_is_valuetype")
+            && bind(h, il2.array_new, "il2cpp_array_new")
+            && bind(h, il2.array_length, "il2cpp_array_length")
+            && bind(h, il2.string_chars, "il2cpp_string_chars")
+            && bind(h, il2.string_length, "il2cpp_string_length")
+            && bind(h, il2.class_get_fields, "il2cpp_class_get_fields")
+            && bind(h, il2.field_get_name, "il2cpp_field_get_name")
+            && bind(h, il2.type_is_byref, "il2cpp_type_is_byref")
+            && bind(h, il2.method_is_generic, "il2cpp_method_is_generic")
+            && bind(h, il2.object_new, "il2cpp_object_new")
+            && bind(h, il2.array_element_size, "il2cpp_array_element_size");
         if (!g_bound) return false;
     }
     void *domain = il2.domain_get();
@@ -157,7 +178,7 @@ bool accepts(const void *parameter, char wanted) {
     case 'i': return (kind >= TypeBoolean && kind <= TypeULong) || (kind == TypeValue && il2.class_is_enum(il2.class_from_type(parameter)));
     case 'f': return kind == TypeFloat || kind == TypeDouble;
     case 'o': return kind == TypeClass || kind == TypeObject || kind == TypeString || kind == TypeArray || kind == TypeVector || kind == TypeGeneric;
-    case 'p': return kind == TypeValue && !il2.class_is_enum(il2.class_from_type(parameter));
+    case 'p': return il2.type_is_byref(parameter) || (kind == TypeValue && !il2.class_is_enum(il2.class_from_type(parameter)));
     case 's': return kind == TypeString;
     default: return true;
     }
@@ -168,6 +189,7 @@ void *overload(void *klass, const char *method, int args, const char *argtypes) 
         void *iterator = nullptr;
         while (void *candidate = il2.class_get_methods(klass, &iterator)) {
             if (std::strcmp(il2.method_get_name(candidate), method) != 0 || (int)il2.method_get_param_count(candidate) != args) continue;
+            if (il2.method_is_generic(candidate)) continue;
             bool fits = true;
             for (int i = 0; i < args && fits; i++) fits = accepts(il2.method_get_param(candidate, i), argtypes[i]);
             if (fits) return candidate;
@@ -182,13 +204,18 @@ void *virtual_of(ok_object self, void *method) {
     return exact ? exact : method;
 }
 
-void *find_method(const char *type, const char *method, int args, const char *argtypes = nullptr) {
+void *class_for(ok_object self, const char *type) {
+    if (type && *type) return find_class(type);
+    return self && ready() ? il2.object_get_class(reinterpret_cast<void *>(self)) : nullptr;
+}
+
+std::string class_key(void *klass) { return std::to_string(reinterpret_cast<uintptr_t>(klass)); }
+
+void *find_method(void *klass, const char *method, int args, const char *argtypes = nullptr) {
     static std::unordered_map<std::string, void *> methods;
-    if (!method) return nullptr;
-    void *klass = find_class(type);
-    if (!klass) return nullptr;
+    if (!method || !klass) return nullptr;
     bool typed = args > 0 && argtypes && (int)std::strlen(argtypes) >= args;
-    std::string key = std::string(type) + "::" + method + "/" + std::to_string(args) + (typed ? std::string(argtypes, args) : std::string());
+    std::string key = class_key(klass) + "::" + method + "/" + std::to_string(args) + (typed ? std::string(argtypes, args) : std::string());
     auto known = methods.find(key);
     if (known != methods.end()) return known->second;
     void *found = typed ? overload(klass, method, args, argtypes) : il2.class_get_method_from_name(klass, method, args);
@@ -196,12 +223,10 @@ void *find_method(const char *type, const char *method, int args, const char *ar
     return found;
 }
 
-bool find_field(const char *type, const char *name, Field &out) {
+bool find_field(void *klass, const char *name, Field &out) {
     static std::unordered_map<std::string, Field> fields;
-    if (!name) return false;
-    void *klass = find_class(type);
-    if (!klass) return false;
-    std::string key = std::string(type) + "::" + name;
+    if (!name || !klass) return false;
+    std::string key = class_key(klass) + "::" + name;
     auto known = fields.find(key);
     if (known != fields.end()) {
         out = known->second;
@@ -251,14 +276,14 @@ int64_t unbox_i(void *result) {
 }
 
 int64_t call_static_i(const char *type, const char *method) {
-    void *m = find_method(type, method, 0);
+    void *m = find_method(find_class(type), method, 0);
     if (!m) return 0;
     void *exc = nullptr;
     return unbox_i(il2.runtime_invoke(m, nullptr, nullptr, &exc));
 }
 
 ok_object call_static_obj(const char *type, const char *method) {
-    void *m = find_method(type, method, 0);
+    void *m = find_method(find_class(type), method, 0);
     if (!m) return 0;
     void *exc = nullptr;
     void *result = il2.runtime_invoke(m, nullptr, nullptr, &exc);
@@ -266,7 +291,7 @@ ok_object call_static_obj(const char *type, const char *method) {
 }
 
 int64_t call_obj_i(ok_object self, const char *type, const char *method) {
-    void *m = virtual_of(self, find_method(type, method, 0));
+    void *m = virtual_of(self, find_method(class_for(self, type), method, 0));
     if (!m || !self) return 0;
     void *exc = nullptr;
     return unbox_i(il2.runtime_invoke(m, reinterpret_cast<void *>(self), nullptr, &exc));
@@ -294,12 +319,94 @@ int64_t run(ok_object self, void *m, int argc, const int64_t *args, const char *
 
 int64_t invoke(ok_object self, const char *type, const char *method, int argc, const int64_t *args, const char *argtypes, char ret) {
     if (argc < 0 || argc > 16) return 0;
-    return run(self, virtual_of(self, find_method(type, method, argc, argtypes)), argc, args, argtypes, ret);
+    return run(self, virtual_of(self, find_method(class_for(self, type), method, argc, argtypes)), argc, args, argtypes, ret);
 }
 
 int64_t invoke_exact(ok_object self, const char *type, const char *method, int argc, const int64_t *args, const char *argtypes, char ret) {
     if (argc < 0 || argc > 16) return 0;
-    return run(self, find_method(type, method, argc, argtypes), argc, args, argtypes, ret);
+    return run(self, find_method(class_for(self, type), method, argc, argtypes), argc, args, argtypes, ret);
+}
+
+ok_object array_new(const char *element_type, int length) {
+    void *klass = find_class(element_type);
+    if (!klass || length < 0) return 0;
+    return reinterpret_cast<ok_object>(il2.array_new(klass, static_cast<uintptr_t>(length)));
+}
+
+int array_length(ok_object array) {
+    return array && ready() ? static_cast<int>(il2.array_length(reinterpret_cast<void *>(array))) : 0;
+}
+
+void *array_data(ok_object array) {
+    return array ? reinterpret_cast<unsigned char *>(array) + ArrayHeader : nullptr;
+}
+
+int is_a(ok_object obj, const char *type) {
+    void *klass = find_class(type);
+    return obj && klass && il2.class_is_assignable_from(klass, il2.object_get_class(reinterpret_cast<void *>(obj))) ? 1 : 0;
+}
+
+int string_utf8(ok_object str, char *buf, int cap) {
+    if (!str || !ready()) return 0;
+    const wchar_t *chars = reinterpret_cast<const wchar_t *>(il2.string_chars(reinterpret_cast<void *>(str)));
+    int length = il2.string_length(reinterpret_cast<void *>(str));
+    int needed = WideCharToMultiByte(CP_UTF8, 0, chars, length, nullptr, 0, nullptr, nullptr);
+    if (!buf || cap <= 0 || needed <= 0) return needed;
+    std::string text(needed, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, chars, length, text.data(), needed, nullptr, nullptr);
+    int copied = needed < cap - 1 ? needed : cap - 1;
+    std::memcpy(buf, text.data(), copied);
+    buf[copied] = 0;
+    return needed;
+}
+
+ok_object new_object(const char *type, int argc, const int64_t *args, const char *argtypes) {
+    if (argc < 0 || argc > 16) return 0;
+    void *klass = find_class(type);
+    void *object = klass ? il2.object_new(klass) : nullptr;
+    void *constructor = object ? find_method(klass, ".ctor", argc, argtypes) : nullptr;
+    if (!object || (argc > 0 && !constructor)) return 0;
+    if (constructor) run(reinterpret_cast<ok_object>(object), constructor, argc, args, argtypes, 'v');
+    return reinterpret_cast<ok_object>(object);
+}
+
+int array_stride(ok_object array) {
+    return array && ready() ? il2.array_element_size(il2.object_get_class(reinterpret_cast<void *>(array))) : 0;
+}
+
+int64_t widen(int kind, const unsigned char *data) {
+    switch (kind) {
+    case TypeBoolean:
+    case TypeByte: return load<uint8_t>(data);
+    case TypeSByte: return load<int8_t>(data);
+    case TypeShort: return load<int16_t>(data);
+    case TypeUShort: return load<uint16_t>(data);
+    case TypeInt: return load<int32_t>(data);
+    case TypeUInt: return load<uint32_t>(data);
+    default: return load<int64_t>(data);
+    }
+}
+
+int enum_name(const char *type, int64_t value, char *buf, int cap) {
+    void *klass = find_class(type);
+    if (!klass || !il2.class_is_enum(klass)) return 0;
+    int kind = il2.type_get_type(il2.class_enum_basetype(klass));
+    void *iterator = nullptr;
+    while (void *field = il2.class_get_fields(klass, &iterator)) {
+        if (!(il2.field_get_flags(field) & FieldStatic)) continue;
+        unsigned char data[8] = {};
+        il2.field_static_get_value(field, data);
+        if (widen(kind, data) != value) continue;
+        const char *name = il2.field_get_name(field);
+        int length = static_cast<int>(std::strlen(name));
+        if (buf && cap > 0) {
+            int copied = length < cap - 1 ? length : cap - 1;
+            std::memcpy(buf, name, copied);
+            buf[copied] = 0;
+        }
+        return length;
+    }
+    return 0;
 }
 
 int unbox(ok_object boxed, void *out, int size) {
@@ -318,7 +425,7 @@ int unbox(ok_object boxed, void *out, int size) {
 double field_num(ok_object self, const char *type, const char *name, double fallback) {
     Field field;
     unsigned char shared[8] = {};
-    if (!find_field(type, name, field)) return fallback;
+    if (!find_field(class_for(self, type), name, field)) return fallback;
     const unsigned char *data = field_data(self, field, shared);
     if (!data) return fallback;
     switch (field.kind) {
@@ -340,7 +447,7 @@ double field_num(ok_object self, const char *type, const char *name, double fall
 int set_field_num(ok_object self, const char *type, const char *name, double value) {
     Field field;
     unsigned char shared[8] = {};
-    if (!find_field(type, name, field)) return 0;
+    if (!find_field(class_for(self, type), name, field)) return 0;
     unsigned char *data = field_data(self, field, shared);
     if (!data) return 0;
     switch (field.kind) {
@@ -364,7 +471,7 @@ int set_field_num(ok_object self, const char *type, const char *name, double val
 ok_object field_obj(ok_object self, const char *type, const char *name) {
     Field field;
     unsigned char shared[8] = {};
-    if (!find_field(type, name, field)) return 0;
+    if (!find_field(class_for(self, type), name, field)) return 0;
     bool reference = field.kind == TypeClass || field.kind == TypeObject || field.kind == TypeString
         || field.kind == TypeArray || field.kind == TypeVector || field.kind == TypeGeneric;
     const unsigned char *data = reference ? field_data(self, field, shared) : nullptr;
@@ -374,7 +481,7 @@ ok_object field_obj(ok_object self, const char *type, const char *name) {
 void *field_ptr(ok_object self, const char *type, const char *name) {
     Field field;
     unsigned char shared[8] = {};
-    if (!find_field(type, name, field) || field.shared) return nullptr;
+    if (!find_field(class_for(self, type), name, field) || field.shared) return nullptr;
     return field_data(self, field, shared);
 }
 
@@ -404,6 +511,14 @@ const Runtime g_runtime = {
     field_ptr,
     unbox,
     invoke_exact,
+    array_new,
+    array_length,
+    array_data,
+    is_a,
+    string_utf8,
+    enum_name,
+    new_object,
+    array_stride,
 };
 
 #endif

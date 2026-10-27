@@ -162,6 +162,22 @@ int unbox(ok_object boxed, void *out, int size) {
 int64_t invoke_exact(ok_object self, const char *type, const char *method, int argc, const int64_t *args, const char *argtypes, char ret) {
     return runtime() ? runtime()->invoke_exact(self, type, method, argc, args, argtypes, ret) : 0;
 }
+ok_object array_new(const char *element_type, int length) { return runtime() ? runtime()->array_new(element_type, length) : 0; }
+int array_length(ok_object array) { return runtime() ? runtime()->array_length(array) : 0; }
+void *array_data(ok_object array) { return runtime() ? runtime()->array_data(array) : nullptr; }
+int is_a(ok_object obj, const char *type) { return runtime() ? runtime()->is_a(obj, type) : 0; }
+int string_utf8(ok_object str, char *buf, int cap) {
+    if (buf && cap > 0) buf[0] = 0;
+    return runtime() ? runtime()->string_utf8(str, buf, cap) : 0;
+}
+int enum_name(const char *type, int64_t value, char *buf, int cap) {
+    if (buf && cap > 0) buf[0] = 0;
+    return runtime() ? runtime()->enum_name(type, value, buf, cap) : 0;
+}
+ok_object new_object(const char *type, int argc, const int64_t *args, const char *argtypes) {
+    return runtime() ? runtime()->new_object(type, argc, args, argtypes) : 0;
+}
+int array_stride(ok_object array) { return runtime() ? runtime()->array_stride(array) : 0; }
 
 void defer(void (*fn)(void *), void *user) {
     if (!fn) return;
@@ -196,6 +212,14 @@ const OkMod g_api = {
     field_ptr,
     unbox,
     invoke_exact,
+    array_new,
+    array_length,
+    array_data,
+    is_a,
+    string_utf8,
+    enum_name,
+    new_object,
+    array_stride,
 };
 
 #if defined(_WIN32)

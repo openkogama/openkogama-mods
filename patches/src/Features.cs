@@ -11,6 +11,8 @@ public static class Features
         ("destructibles_unlock", "MVMaterial", "get_IsAvailable", 1),
         ("unlimited_muzzle_position", "Assets.Scripts.WorldObjectTypes.CustomGun.MVCustomGunBlueprint", "SetMuzzlePointPosition", null),
 
+        ("atlas_check_skip", "MaterialLoader", "CheckAtlasIntegrity", 1),
+
         ("anticheat_off", "CheatHandling", "MachineBanDetected", null),
         ("anticheat_off", "CheatHandling", "CheatSoftwareRunningDetected", null),
         ("anticheat_off", "CheatHandling", "TextureHackDetected", null),
@@ -28,6 +30,14 @@ public static class Features
         ("frame", "MVGameControllerBase", "Update"),
         ("frame.late", "FullScreenController", "LateUpdate"),
         ("app.quit", "MVGameControllerBase", "OnApplicationQuit"),
+        ("editor.select", "SelectionController", "SelectWO"),
+        ("editor.translate_start", "ESTranslate", "Enter"),
+        ("editor.translate_end", "ESTranslate", "Exit"),
+        ("editor.rotation_reset", "UGUI.Desktop.Scripts.EditMode.Gizmo.RotationHelper", "ResetRotation"),
+        ("world.link_added", "MVNetworkGame.OperationRequests", "AddLink"),
+        ("world.link_removed", "Links", "RemoveLink"),
+        ("world.object_link_added", "MVNetworkGame.OperationRequests", "AddObjectLink"),
+        ("world.object_link_removed", "ObjectLinks", "RemoveObjectLink"),
         ("editor.paint_cubes", "PaintCubes", "Execute"),
         ("editor.translate", "ESTranslate", "Execute"),
         ("editor.grid_point", "MVWorldObjectClient", "GetClosestGridPoint"),

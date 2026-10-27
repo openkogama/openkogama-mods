@@ -177,7 +177,7 @@ static int MonoIl(string assembly, string symbol)
     if (mono.Find(type, method, parameters) is not { HasBody: true } m) { Console.WriteLine("not found"); return 1; }
     bool refsShim = mono.Module.AssemblyReferences.Any(r => r.Name == "OkModShim");
     Console.WriteLine($"{symbol} (references OkModShim: {refsShim})");
-    foreach (var insn in m.Body.Instructions.Take(6)) Console.WriteLine($"  {insn}");
+    foreach (var insn in m.Body.Instructions) Console.WriteLine($"  {insn}");
     return 0;
 }
 

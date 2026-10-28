@@ -1,6 +1,7 @@
 #include "render.h"
 #include "api.h"
 #include "frame.h"
+#include "game.h"
 #include "paint.h"
 #include "runtime.h"
 #include "textures.h"
@@ -652,6 +653,7 @@ namespace render {
         previous = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(Procedure)));
         hooked = Hook();
         if (paint9::Hook()) hooked = true;
+        if (GetModuleHandleW(L"d3d9.dll") && game::GraphicsVersion().rfind("Direct3D 9", 0) == 0 && game::NativeTexture(paint9::Adopt)) hooked = true;
         if (!hooked) runtime::Log("could not reach the game's drawing, scripts run without a hud");
         return true;
     }

@@ -71,4 +71,27 @@ namespace game {
         if (Vector(Call(transform, "ProtectedTransform", "get_position"), value)) return true;
         return Position(api->call_static_obj("UnityEngine.Camera", "get_main"), value);
     }
+
+    std::string GraphicsVersion() {
+        if (!api) return {};
+        ok_object version = api->call_static_obj("UnityEngine.SystemInfo", "get_graphicsDeviceVersion");
+        char text[256] = "";
+        if (version) api->string_utf8(version, text, sizeof(text));
+        return text;
+    }
+
+    bool NativeTexture(bool (*use)(void* native)) {
+        if (!api) return false;
+        int64_t sizes[2] = {2, 2};
+        ok_object texture = api->new_object("UnityEngine.Texture2D", 2, sizes, "ii");
+        if (!texture) return false;
+        api->invoke(texture, "UnityEngine.Texture2D", "Apply", 0, nullptr, "", 'v');
+        void* native = nullptr;
+        ok_object boxed = (ok_object)api->invoke(texture, "UnityEngine.Texture", "GetNativeTexturePtr", 0, nullptr, "", 'o');
+        if (boxed) api->unbox(boxed, &native, sizeof(native));
+        bool used = native && use(native);
+        int64_t argument = (int64_t)texture;
+        api->invoke(0, "UnityEngine.Object", "Destroy", 1, &argument, "o", 'v');
+        return used;
+    }
 }

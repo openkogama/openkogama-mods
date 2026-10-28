@@ -119,7 +119,7 @@ if(MSVC)
 endif()
 
 add_library(scripts SHARED ${SCRIPTS}/src/scripts.cpp ${SCRIPTS}/src/render.cpp ${SCRIPTS}/src/paint9.cpp ${SCRIPTS}/src/remote.cpp ${IMGUI}/imgui_impl_win32.cpp)
-target_link_libraries(scripts PRIVATE scripts_core d3d11 dxgi d3dcompiler dwmapi winhttp bcrypt shell32 user32 gdi32)
+target_link_libraries(scripts PRIVATE scripts_core d3d11 dxgi d3dcompiler dxguid dwmapi winhttp bcrypt shell32 user32 gdi32)
 set_target_properties(scripts PROPERTIES PREFIX "" OUTPUT_NAME "scripts")
 
 add_executable(scripts_test ${SCRIPTS}/test/scripts_test.cpp)

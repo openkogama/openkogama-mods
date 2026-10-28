@@ -18,5 +18,6 @@ namespace render {
 
 namespace paint9 {
     bool Hook();
+    bool Adopt(void* native);
     void Unhook();
 }

@@ -2,8 +2,10 @@
 #include "runtime.h"
 #include <d3d9.h>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -357,14 +359,42 @@ namespace paint9 {
             }
         }
 
-        void Patch(IDirect3DDevice9* dummy, bool extended) {
-            void** slots = *reinterpret_cast<void***>(dummy);
-            Swap(slots, ResetSlot, reinterpret_cast<void*>(&HookedReset), resets);
-            Swap(slots, PresentSlot, reinterpret_cast<void*>(&HookedPresent), presents);
-            if (extended) Swap(slots, PresentExSlot, reinterpret_cast<void*>(&HookedPresentEx), presentsEx);
+        HMODULE ModuleOf(const void* address) {
+            HMODULE module = nullptr;
+            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, static_cast<LPCWSTR>(address), &module);
+            return module;
+        }
+
+        std::string Where(const void* address) {
+            char text[MAX_PATH + 32] = "";
+            HMODULE module = ModuleOf(address);
+            if (!module) {
+                std::snprintf(text, sizeof(text), "heap %p", address);
+                return text;
+            }
+            char path[MAX_PATH] = "";
+            GetModuleFileNameA(module, path, MAX_PATH);
+            const char* name = std::strrchr(path, '\\');
+            std::snprintf(text, sizeof(text), "%s+%zx", name ? name + 1 : path, (size_t)(static_cast<const char*>(address) - reinterpret_cast<const char*>(module)));
+            return text;
+        }
+
+        std::string Describe(IDirect3DDevice9* target) {
+            void** slots = *reinterpret_cast<void***>(target);
+            return Where(slots) + " presenting at " + Where(slots[PresentSlot]);
+        }
+
+        void Patch(IDirect3DDevice9* target, bool extended, bool anywhere) {
+            void** slots = *reinterpret_cast<void***>(target);
+            if (anywhere || ModuleOf(slots)) {
+                Swap(slots, ResetSlot, reinterpret_cast<void*>(&HookedReset), resets);
+                Swap(slots, PresentSlot, reinterpret_cast<void*>(&HookedPresent), presents);
+                if (extended) Swap(slots, PresentExSlot, reinterpret_cast<void*>(&HookedPresentEx), presentsEx);
+            }
             IDirect3DSwapChain9* chain = nullptr;
-            if (FAILED(dummy->GetSwapChain(0, &chain))) return;
-            Swap(*reinterpret_cast<void***>(chain), ChainPresentSlot, reinterpret_cast<void*>(&HookedChainPresent), chainPresents);
+            if (FAILED(target->GetSwapChain(0, &chain))) return;
+            void** chainSlots = *reinterpret_cast<void***>(chain);
+            if (anywhere || ModuleOf(chainSlots)) Swap(chainSlots, ChainPresentSlot, reinterpret_cast<void*>(&HookedChainPresent), chainPresents);
             chain->Release();
         }
 
@@ -399,12 +429,14 @@ namespace paint9 {
         parameters.SwapEffect = D3DSWAPEFFECT_DISCARD;
         parameters.BackBufferFormat = D3DFMT_UNKNOWN;
         parameters.hDeviceWindow = probe;
+        std::set<std::string> seen;
         if (IDirect3D9* direct = create(D3D_SDK_VERSION)) {
             for (DWORD behavior : Behaviors())
                 for (D3DDEVTYPE kind : {D3DDEVTYPE_HAL, D3DDEVTYPE_NULLREF}) {
                     IDirect3DDevice9* dummy = nullptr;
                     if (FAILED(direct->CreateDevice(D3DADAPTER_DEFAULT, kind, probe, behavior, &parameters, &dummy))) continue;
-                    Patch(dummy, false);
+                    seen.insert(Describe(dummy));
+                    Patch(dummy, false, false);
                     dummy->Release();
                     break;
                 }
@@ -415,16 +447,37 @@ namespace paint9 {
             for (DWORD behavior : Behaviors()) {
                 IDirect3DDevice9Ex* dummy = nullptr;
                 if (FAILED(directEx->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, probe, behavior, &parameters, nullptr, &dummy))) continue;
-                Patch(dummy, true);
+                seen.insert(Describe(dummy));
+                Patch(dummy, true, false);
                 dummy->Release();
             }
             directEx->Release();
         }
         DestroyWindow(probe);
         UnregisterClassW(type.lpszClassName, type.hInstance);
+        for (const std::string& table : seen) runtime::Log("direct3d 9 probe table " + table);
         int tables = presents.count.load(), chains = chainPresents.count.load();
         runtime::Log("direct3d 9 hooks on " + std::to_string(tables) + " device and " + std::to_string(chains) + " swap chain tables");
         return tables > 0 || chains > 0;
+    }
+
+    bool Adopt(void* native) {
+        IDirect3DBaseTexture9* texture = nullptr;
+        if (!native || FAILED(static_cast<IUnknown*>(native)->QueryInterface(IID_IDirect3DBaseTexture9, reinterpret_cast<void**>(&texture)))) {
+            runtime::Log("the game's texture is not a direct3d 9 one");
+            return false;
+        }
+        IDirect3DDevice9* owner = nullptr;
+        HRESULT result = texture->GetDevice(&owner);
+        texture->Release();
+        if (FAILED(result) || !owner) return false;
+        IDirect3DDevice9Ex* extended = nullptr;
+        bool ex = SUCCEEDED(owner->QueryInterface(IID_IDirect3DDevice9Ex, reinterpret_cast<void**>(&extended)));
+        if (extended) extended->Release();
+        runtime::Log("the game's direct3d 9 device table " + Describe(owner));
+        Patch(owner, ex, true);
+        owner->Release();
+        return presents.count.load() > 0;
     }
 
     void Unhook() {

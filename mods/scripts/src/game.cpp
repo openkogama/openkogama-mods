@@ -1,5 +1,6 @@
 #include "game.h"
 #include "okmod.h"
+#include <string>
 
 namespace game {
     namespace {
@@ -7,6 +8,12 @@ namespace game {
 
         ok_object Call(ok_object self, const char* type, const char* method) {
             return self ? (ok_object)api->invoke(self, type, method, 0, nullptr, "", 'o') : 0;
+        }
+
+        ok_object Controller(const char* method) {
+            for (const char* type : {"MVGameControllerBase", "MVGameController"})
+                if (ok_object result = api->call_static_obj(type, method)) return result;
+            return 0;
         }
 
         bool Vector(ok_object boxed, float* value) {
@@ -18,25 +25,41 @@ namespace game {
             return true;
         }
 
-        ok_object LocalPlayer() { return api->call_static_obj("MVGameControllerBase", "get_LocalPlayer"); }
+        bool Position(ok_object component, float* value) {
+            return Vector(Call(Call(component, "UnityEngine.Component", "get_transform"), "UnityEngine.Transform", "get_position"), value);
+        }
+
+        ok_object LocalPlayer() {
+            if (ok_object player = Controller("get_LocalPlayer")) return player;
+            return Call(Controller("get_Game"), "MVNetworkGame", "get_LocalPlayer");
+        }
     }
 
     void Attach(const OkMod* host) { api = host; }
 
     bool PlayerPosition(float* value) {
         if (!api) return false;
+        ok_object manager = Controller("get_WOCM");
         ok_object player = LocalPlayer();
-        ok_object manager = api->call_static_obj("MVGameControllerBase", "get_WOCM");
-        if (!player || !manager) return false;
-        int64_t id = api->invoke(player, "MVPlayer", "get_WoId", 0, nullptr, "", 'i');
-        ok_object avatar = (ok_object)api->invoke(manager, "MVWorldObjectClientManager", "GetWorldObjectClient", 1, &id, "i", 'o');
-        return Vector(Call(avatar, "MVWorldObjectClient", "get_Position"), value);
+        int64_t id = player ? api->invoke(player, "MVPlayer", "get_WoId", 0, nullptr, "", 'i') : 0;
+        if (manager && id > 0) {
+            ok_object client = (ok_object)api->invoke(manager, "MVWorldObjectClientManager", "GetWorldObjectClient", 1, &id, "i", 'o');
+            if (Vector(Call(client, "MVWorldObjectClient", "get_Position"), value)) return true;
+        }
+        ok_object avatar = Call(manager, "MVWorldObjectClientManager", "get_AvatarLocal");
+        if (!avatar) avatar = api->call_static_obj("GameDB", "get_LocalAvatar");
+        return Position(avatar, value);
     }
 
     std::string PlayerName() {
         if (!api) return {};
-        ok_object profile = Call(LocalPlayer(), "MVPlayer", "get_UserProfileData");
-        ok_object name = profile ? api->field_obj(profile, nullptr, "UserName") : 0;
+        ok_object player = LocalPlayer();
+        ok_object name = Call(player, "MVPlayer", "get_Username");
+        if (!name) {
+            ok_object profile = Call(player, "MVPlayer", "get_UserProfileData");
+            name = profile ? api->field_obj(profile, nullptr, "UserName") : 0;
+            if (!name) name = Call(profile, nullptr, "get_UserName");
+        }
         char text[256] = "";
         if (name) api->string_utf8(name, text, sizeof(text));
         return text;
@@ -44,8 +67,8 @@ namespace game {
 
     bool CameraPosition(float* value) {
         if (!api) return false;
-        ok_object manager = api->call_static_obj("MVGameControllerBase", "get_MainCameraManager");
-        ok_object transform = Call(manager, "MainCameraManager", "get_ProtectedTransform");
-        return Vector(Call(transform, "ProtectedTransform", "get_position"), value);
+        ok_object transform = Call(Controller("get_MainCameraManager"), "MainCameraManager", "get_ProtectedTransform");
+        if (Vector(Call(transform, "ProtectedTransform", "get_position"), value)) return true;
+        return Position(api->call_static_obj("UnityEngine.Camera", "get_main"), value);
     }
 }

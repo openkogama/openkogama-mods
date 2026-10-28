@@ -5,16 +5,21 @@
 #include <cstring>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace paint9 {
     namespace {
         using PresentFn = HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*);
         using ResetFn = HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
+        using PresentExFn = HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9Ex*, const RECT*, const RECT*, HWND, const RGNDATA*, DWORD);
+        using ChainPresentFn = HRESULT(STDMETHODCALLTYPE*)(IDirect3DSwapChain9*, const RECT*, const RECT*, HWND, const RGNDATA*, DWORD);
         using CreateFn = IDirect3D9*(WINAPI*)(UINT);
         using CreateExFn = HRESULT(WINAPI*)(UINT, IDirect3D9Ex**);
 
         constexpr int ResetSlot = 16;
         constexpr int PresentSlot = 17;
+        constexpr int PresentExSlot = 121;
+        constexpr int ChainPresentSlot = 3;
         constexpr DWORD VertexFormat = D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1;
 
         struct Vertex {
@@ -31,14 +36,17 @@ namespace paint9 {
             bool dirty = true;
         };
 
-        struct Table {
-            void** slots = nullptr;
-            PresentFn present = nullptr;
-            ResetFn reset = nullptr;
+        struct Hooks {
+            void** tables[32] = {};
+            void* originals[32] = {};
+            std::atomic<int> count{0};
         };
 
-        Table tables[2];
+        Hooks presents, presentsEx, chainPresents, resets;
+        std::atomic<bool> reached{false};
+        bool blockless = false;
         IDirect3DDevice9* device = nullptr;
+        IDirect3DDevice9* refused = nullptr;
         IDirect3DVertexBuffer9* vertices = nullptr;
         IDirect3DIndexBuffer9* indices = nullptr;
         UINT vertexCapacity = 0;
@@ -209,6 +217,8 @@ namespace paint9 {
             IDirect3DStateBlock9* saved = nullptr;
             IDirect3DSurface9* target = nullptr;
             if (!Grow(frame) || FAILED(device->CreateStateBlock(D3DSBT_ALL, &saved))) {
+                if (!blockless) runtime::Log("direct3d 9 refused to save the game's drawing state");
+                blockless = true;
                 Free(backbuffer);
                 return;
             }
@@ -253,7 +263,11 @@ namespace paint9 {
             if (render::Quitting() || broken) return;
             if (target != device) {
                 HWND window = WindowOf(target);
-                if (!window || (window != render::GameWindow() && !IsChild(window, render::GameWindow()) && !IsChild(render::GameWindow(), window))) return;
+                if (!window || (window != render::GameWindow() && !IsChild(window, render::GameWindow()) && !IsChild(render::GameWindow(), window))) {
+                    if (refused != target) runtime::Log("a direct3d 9 device draws for another window");
+                    refused = target;
+                    return;
+                }
                 Drop();
                 device = target;
                 runtime::Log("scripts draw into the game with direct3d 9");
@@ -264,62 +278,102 @@ namespace paint9 {
             if (current && !current->commands.empty()) Draw(*current);
         }
 
-        HRESULT Present(int table, IDirect3DDevice9* target, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty) {
+        template <typename T> T Original(Hooks& hooks, void* object) {
+            void** table = *reinterpret_cast<void***>(object);
+            int count = hooks.count.load(std::memory_order_acquire);
+            for (int i = 0; i < count; i++)
+                if (hooks.tables[i] == table) return reinterpret_cast<T>(hooks.originals[i]);
+            return nullptr;
+        }
+
+        void Reached() {
+            if (!reached.exchange(true)) runtime::Log("direct3d 9 presents reach the scripts");
+        }
+
+        HRESULT STDMETHODCALLTYPE HookedPresent(IDirect3DDevice9* target, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty) {
+            PresentFn original = Original<PresentFn>(presents, target);
+            if (!original) return D3DERR_INVALIDCALL;
+            Reached();
             if (presenting++ == 0) Paint(target);
-            HRESULT result = tables[table].present(target, source, destination, window, dirty);
+            HRESULT result = original(target, source, destination, window, dirty);
             presenting--;
             return result;
         }
 
-        HRESULT Reset(int table, IDirect3DDevice9* target, D3DPRESENT_PARAMETERS* parameters) {
+        HRESULT STDMETHODCALLTYPE HookedPresentEx(IDirect3DDevice9Ex* target, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty, DWORD flags) {
+            PresentExFn original = Original<PresentExFn>(presentsEx, target);
+            if (!original) return D3DERR_INVALIDCALL;
+            Reached();
+            if (presenting++ == 0) Paint(target);
+            HRESULT result = original(target, source, destination, window, dirty, flags);
+            presenting--;
+            return result;
+        }
+
+        HRESULT STDMETHODCALLTYPE HookedChainPresent(IDirect3DSwapChain9* chain, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty, DWORD flags) {
+            ChainPresentFn original = Original<ChainPresentFn>(chainPresents, chain);
+            if (!original) return D3DERR_INVALIDCALL;
+            Reached();
+            if (presenting++ == 0) {
+                IDirect3DDevice9* owner = nullptr;
+                if (SUCCEEDED(chain->GetDevice(&owner))) {
+                    Paint(owner);
+                    owner->Release();
+                }
+            }
+            HRESULT result = original(chain, source, destination, window, dirty, flags);
+            presenting--;
+            return result;
+        }
+
+        HRESULT STDMETHODCALLTYPE HookedReset(IDirect3DDevice9* target, D3DPRESENT_PARAMETERS* parameters) {
+            ResetFn original = Original<ResetFn>(resets, target);
+            if (!original) return D3DERR_INVALIDCALL;
             if (target == device) Drop();
-            return tables[table].reset(target, parameters);
+            return original(target, parameters);
         }
 
-        HRESULT STDMETHODCALLTYPE Present0(IDirect3DDevice9* target, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty) {
-            return Present(0, target, source, destination, window, dirty);
-        }
-
-        HRESULT STDMETHODCALLTYPE Present1(IDirect3DDevice9* target, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty) {
-            return Present(1, target, source, destination, window, dirty);
-        }
-
-        HRESULT STDMETHODCALLTYPE Reset0(IDirect3DDevice9* target, D3DPRESENT_PARAMETERS* parameters) { return Reset(0, target, parameters); }
-
-        HRESULT STDMETHODCALLTYPE Reset1(IDirect3DDevice9* target, D3DPRESENT_PARAMETERS* parameters) { return Reset(1, target, parameters); }
-
-        template <typename T> void Swap(void** slots, int slot, T hook, T& original) {
+        void Swap(void** table, int slot, void* hook, Hooks& hooks) {
+            int count = hooks.count.load(std::memory_order_relaxed);
+            if (count >= 32 || table[slot] == hook) return;
+            for (int i = 0; i < count; i++)
+                if (hooks.tables[i] == table) return;
             DWORD protection = 0;
-            if (!VirtualProtect(&slots[slot], sizeof(void*), PAGE_READWRITE, &protection)) return;
-            original = reinterpret_cast<T>(slots[slot]);
-            std::atomic_thread_fence(std::memory_order_seq_cst);
-            slots[slot] = reinterpret_cast<void*>(hook);
-            VirtualProtect(&slots[slot], sizeof(void*), protection, &protection);
+            if (!VirtualProtect(&table[slot], sizeof(void*), PAGE_READWRITE, &protection)) return;
+            hooks.tables[count] = table;
+            hooks.originals[count] = table[slot];
+            hooks.count.store(count + 1, std::memory_order_release);
+            table[slot] = hook;
+            VirtualProtect(&table[slot], sizeof(void*), protection, &protection);
         }
 
-        template <typename T> void Put(void** slots, int slot, T original) {
-            DWORD protection = 0;
-            if (!slots || !original || !VirtualProtect(&slots[slot], sizeof(void*), PAGE_READWRITE, &protection)) return;
-            slots[slot] = reinterpret_cast<void*>(original);
-            VirtualProtect(&slots[slot], sizeof(void*), protection, &protection);
+        void Restore(int slot, Hooks& hooks) {
+            int count = hooks.count.load(std::memory_order_acquire);
+            for (int i = 0; i < count; i++) {
+                DWORD protection = 0;
+                if (!VirtualProtect(&hooks.tables[i][slot], sizeof(void*), PAGE_READWRITE, &protection)) continue;
+                hooks.tables[i][slot] = hooks.originals[i];
+                VirtualProtect(&hooks.tables[i][slot], sizeof(void*), protection, &protection);
+            }
         }
 
-        bool Patch(IDirect3DDevice9* dummy) {
+        void Patch(IDirect3DDevice9* dummy, bool extended) {
             void** slots = *reinterpret_cast<void***>(dummy);
-            for (Table& table : tables)
-                if (table.slots == slots) return true;
-            int index = tables[0].slots ? 1 : 0;
-            if (tables[index].slots) return false;
-            tables[index].slots = slots;
-            if (index == 0) {
-                Swap(slots, ResetSlot, &Reset0, tables[0].reset);
-                Swap(slots, PresentSlot, &Present0, tables[0].present);
-            }
-            else {
-                Swap(slots, ResetSlot, &Reset1, tables[1].reset);
-                Swap(slots, PresentSlot, &Present1, tables[1].present);
-            }
-            return true;
+            Swap(slots, ResetSlot, reinterpret_cast<void*>(&HookedReset), resets);
+            Swap(slots, PresentSlot, reinterpret_cast<void*>(&HookedPresent), presents);
+            if (extended) Swap(slots, PresentExSlot, reinterpret_cast<void*>(&HookedPresentEx), presentsEx);
+            IDirect3DSwapChain9* chain = nullptr;
+            if (FAILED(dummy->GetSwapChain(0, &chain))) return;
+            Swap(*reinterpret_cast<void***>(chain), ChainPresentSlot, reinterpret_cast<void*>(&HookedChainPresent), chainPresents);
+            chain->Release();
+        }
+
+        std::vector<DWORD> Behaviors() {
+            std::vector<DWORD> behaviors;
+            for (DWORD processing : {D3DCREATE_SOFTWARE_VERTEXPROCESSING, D3DCREATE_HARDWARE_VERTEXPROCESSING, D3DCREATE_MIXED_VERTEXPROCESSING, D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_PUREDEVICE})
+                for (DWORD threading : {0ul, (DWORD)D3DCREATE_MULTITHREADED})
+                    behaviors.push_back(processing | threading | D3DCREATE_FPU_PRESERVE);
+            return behaviors;
         }
 
         LRESULT CALLBACK Probe(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -345,35 +399,38 @@ namespace paint9 {
         parameters.SwapEffect = D3DSWAPEFFECT_DISCARD;
         parameters.BackBufferFormat = D3DFMT_UNKNOWN;
         parameters.hDeviceWindow = probe;
-        bool hooked = false;
         if (IDirect3D9* direct = create(D3D_SDK_VERSION)) {
-            for (D3DDEVTYPE kind : {D3DDEVTYPE_HAL, D3DDEVTYPE_NULLREF}) {
-                IDirect3DDevice9* dummy = nullptr;
-                if (FAILED(direct->CreateDevice(D3DADAPTER_DEFAULT, kind, probe, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &parameters, &dummy))) continue;
-                hooked = Patch(dummy) || hooked;
-                dummy->Release();
-                break;
-            }
+            for (DWORD behavior : Behaviors())
+                for (D3DDEVTYPE kind : {D3DDEVTYPE_HAL, D3DDEVTYPE_NULLREF}) {
+                    IDirect3DDevice9* dummy = nullptr;
+                    if (FAILED(direct->CreateDevice(D3DADAPTER_DEFAULT, kind, probe, behavior, &parameters, &dummy))) continue;
+                    Patch(dummy, false);
+                    dummy->Release();
+                    break;
+                }
             direct->Release();
         }
         IDirect3D9Ex* directEx = nullptr;
         if (createEx && SUCCEEDED(createEx(D3D_SDK_VERSION, &directEx))) {
-            IDirect3DDevice9Ex* dummy = nullptr;
-            if (SUCCEEDED(directEx->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, probe, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &parameters, nullptr, &dummy))) {
-                hooked = Patch(dummy) || hooked;
+            for (DWORD behavior : Behaviors()) {
+                IDirect3DDevice9Ex* dummy = nullptr;
+                if (FAILED(directEx->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, probe, behavior, &parameters, nullptr, &dummy))) continue;
+                Patch(dummy, true);
                 dummy->Release();
             }
             directEx->Release();
         }
         DestroyWindow(probe);
         UnregisterClassW(type.lpszClassName, type.hInstance);
-        return hooked;
+        int tables = presents.count.load(), chains = chainPresents.count.load();
+        runtime::Log("direct3d 9 hooks on " + std::to_string(tables) + " device and " + std::to_string(chains) + " swap chain tables");
+        return tables > 0 || chains > 0;
     }
 
     void Unhook() {
-        Put(tables[0].slots, PresentSlot, tables[0].present);
-        Put(tables[0].slots, ResetSlot, tables[0].reset);
-        Put(tables[1].slots, PresentSlot, tables[1].present);
-        Put(tables[1].slots, ResetSlot, tables[1].reset);
+        Restore(PresentSlot, presents);
+        Restore(PresentExSlot, presentsEx);
+        Restore(ResetSlot, resets);
+        Restore(ChainPresentSlot, chainPresents);
     }
 }

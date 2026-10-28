@@ -57,6 +57,14 @@ add_library(farview SHARED ../mods/farview/farview.c)
 target_include_directories(farview PRIVATE ${CMAKE_SOURCE_DIR}/../include)
 set_target_properties(farview PROPERTIES PREFIX "" OUTPUT_NAME "farview")
 
+add_library(freecam SHARED ../mods/freecam/freecam.c)
+target_include_directories(freecam PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+set_target_properties(freecam PROPERTIES PREFIX "" OUTPUT_NAME "freecam")
+
+add_library(antiafk SHARED ../mods/antiafk/antiafk.c)
+target_include_directories(antiafk PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+set_target_properties(antiafk PROPERTIES PREFIX "" OUTPUT_NAME "antiafk")
+
 set(KOGAMASTUDIO ${CMAKE_SOURCE_DIR}/../mods/kogamastudio)
 file(GLOB KOGAMASTUDIO_SOURCES ${KOGAMASTUDIO}/src/*.cpp ${KOGAMASTUDIO}/imgui/*.cpp ${KOGAMASTUDIO}/imnodes/*.cpp)
 add_library(kogamastudio SHARED ${KOGAMASTUDIO_SOURCES})

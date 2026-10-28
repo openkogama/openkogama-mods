@@ -26,8 +26,10 @@ namespace game {
             return true;
         }
 
-        bool Position(ok_object component, float* value) {
-            return Vector(Call(Call(component, "UnityEngine.Component", "get_transform"), "UnityEngine.Transform", "get_position"), value);
+        bool Position(ok_object object, float* value) {
+            if (!object) return false;
+            if (Vector(Call(object, nullptr, "get_Position"), value)) return true;
+            return Vector(Call(Call(object, "UnityEngine.Component", "get_transform"), "UnityEngine.Transform", "get_position"), value);
         }
 
         ok_object LocalPlayer() {

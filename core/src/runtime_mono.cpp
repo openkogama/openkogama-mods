@@ -241,8 +241,10 @@ void *virtual_of(ok_object self, void *method) {
 }
 
 void *class_for(ok_object self, const char *type) {
-    if (type && *type) return find_class(type);
-    return self && ready() ? mono.object_get_class(reinterpret_cast<void *>(self)) : nullptr;
+    if (!type || !*type) return self && ready() ? mono.object_get_class(reinterpret_cast<void *>(self)) : nullptr;
+    void *klass = find_class(type);
+    if (klass && self && !mono.class_is_assignable_from(klass, mono.object_get_class(reinterpret_cast<void *>(self)))) return nullptr;
+    return klass;
 }
 
 std::string class_key(void *klass) { return std::to_string(reinterpret_cast<uintptr_t>(klass)); }

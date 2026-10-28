@@ -138,12 +138,13 @@ static int InstallMono(string input, string shim, string output)
 {
     MonoPatch.Toggle[] toggles = [.. Features.Toggles.Select(t => new MonoPatch.Toggle(t.Flag, t.Type, t.Method, t.Ret))];
     MonoPatch.FloatSet[] floats = [.. Features.Floats.Select(f => new MonoPatch.FloatSet(f.Flag, f.Type, f.Method, f.Param, f.Arg, f.Fallback))];
+    MonoPatch.Hook[] hooks = [.. Features.Hooks.Select(h => new MonoPatch.Hook(h.Event, h.Type, h.Method))];
     try
     {
-        List<string> applied = MonoPatch.Install(input, shim, output, toggles, floats);
+        List<string> applied = MonoPatch.Install(input, shim, output, toggles, floats, hooks);
         if (applied.Count == 0) { Console.WriteLine("mono: nothing resolved to patch"); return 3; }
         foreach (string a in applied) Console.WriteLine($"mono: {a}");
-        Console.WriteLine($"mono: {applied.Count} IL toggles");
+        Console.WriteLine($"mono: {applied.Count} IL hooks");
         return 0;
     }
     catch (Exception error)

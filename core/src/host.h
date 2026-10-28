@@ -32,6 +32,8 @@ void pump();
 int control_command(const char *line);
 
 void runtime_attach();
+bool attach_mono();
+int64_t runtime_address(void *handle);
 }
 
 #endif

@@ -526,8 +526,8 @@ const Runtime g_runtime = {
 
 void runtime_attach() {
 #if defined(_WIN32)
-    if (!GetModuleHandleA("GameAssembly.dll")) return;
-    set_runtime(&g_runtime);
+    if (GetModuleHandleA("GameAssembly.dll")) set_runtime(&g_runtime);
+    else attach_mono();
 #endif
 }
 }

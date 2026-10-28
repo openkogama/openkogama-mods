@@ -12,6 +12,7 @@ endif()
 add_library(okmod_core STATIC
     src/core.cpp
     src/runtime_il2cpp.cpp
+    src/runtime_mono.cpp
 )
 target_include_directories(okmod_core PUBLIC ${CMAKE_SOURCE_DIR}/../include PRIVATE ${CMAKE_SOURCE_DIR}/src)
 

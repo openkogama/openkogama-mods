@@ -17,13 +17,14 @@ public static class Hook
     {
         bool x86 = !pe.Is64;
 
-        var plan = new List<(Site S, int Steal, byte[] Stolen)>();
+        var plan = new List<(Site S, int Steal, byte[] Stolen, List<int> Moved)>();
         foreach (Site s in sites)
         {
             int raw = pe.Rva2Raw(s.Rva);
             int steal = X64.StealLength(pe.Bytes, raw, JmpBack, x86);
-            if (steal == 0 || pe.Relocations(s.Rva, steal, false)) { log($"detours: cannot move the start of {s.Name} at {s.Rva:X}, skipping it"); continue; }
-            plan.Add((s, steal, pe.Bytes[raw..(raw + steal)]));
+            List<int>? moved = steal == 0 ? null : pe.MovableRelocations(s.Rva, steal);
+            if (moved is null || (!x86 && moved.Count > 0)) { log($"detours: cannot move the start of {s.Name} at {s.Rva:X}, skipping it"); continue; }
+            plan.Add((s, steal, pe.Bytes[raw..(raw + steal)], moved));
         }
         if (plan.Count == 0) return [];
 
@@ -38,7 +39,7 @@ public static class Hook
         }
         var nameRva = new Dictionary<string, uint>();
         var names = new List<byte>();
-        foreach (var (s, _, _) in plan)
+        foreach (var (s, _, _, _) in plan)
             if (!nameRva.ContainsKey(s.Name))
             {
                 nameRva[s.Name] = (uint)(v + cursor + names.Count);
@@ -49,7 +50,7 @@ public static class Hook
         var blob = new List<byte>();
         for (int i = 0; i < plan.Count; i++)
         {
-            var (s, steal, stolen) = plan[i];
+            var (s, steal, stolen, _) = plan[i];
             uint a = stubRva[i];
             if (x86 && s.Kind == Kind.Toggle) Toggle86(blob, a, s, steal, stolen, nameRva[s.Name], flagIat);
             else if (x86) Event86(blob, a, s, steal, stolen, nameRva[s.Name], eventIat);
@@ -64,7 +65,7 @@ public static class Hook
         var applied = new List<Site>();
         for (int i = 0; i < plan.Count; i++)
         {
-            var (s, steal, _) = plan[i];
+            var (s, steal, _, _) = plan[i];
             int raw = pe.Rva2Raw(s.Rva);
             pe.Bytes[raw] = 0xE9;
             BitConverter.GetBytes((int)(stubRva[i] - (s.Rva + 5))).CopyTo(pe.Bytes, raw + 1);
@@ -72,6 +73,8 @@ public static class Hook
             pe.Relocations(s.Rva, steal, true);
             applied.Add(s);
         }
+        List<uint> copies = [.. plan.SelectMany((p, i) => p.Moved.Select(offset => stubRva[i] + (uint)(Prefix(p.S.Kind) + offset)))];
+        if (copies.Count > 0) pe.AddRelocations(copies);
         return applied;
     }
 

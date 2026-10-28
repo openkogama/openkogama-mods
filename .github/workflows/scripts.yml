@@ -21,6 +21,14 @@ jobs:
             unity: 2022.3.43f1
             arch: Win32
             build: kogama-301095-0eb09042-57bc-4932-af97-6ed48e1afc4f
+          - version: 2.30.6
+            unity: 2018.4.31f1
+            arch: Win32
+            build: kogama-230006-57eff71c-042d-416b-b01b-b2c2e0c9cce5
+          - version: 1.88.0
+            unity: 5.3.8p2
+            arch: Win32
+            build: kogama-188000-4625ac7c-e84e-4f6b-b594-7ad27c45eace
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -52,6 +60,7 @@ jobs:
           cmake -S core -B core/build -A ${{ matrix.arch }}
           cmake --build core/build --config Release
           dotnet build patcher/OpenKogama.Mods.Patcher.csproj -c Release
+          dotnet build shim/OkModShim.csproj -c Release
 
       - name: sandbox and api tests
         run: ctest --test-dir core/build -C Release -R scripts --output-on-failure
@@ -72,11 +81,22 @@ jobs:
       - name: patch client
         shell: pwsh
         run: |
-          $game = (Get-ChildItem client -Recurse -Filter GameAssembly.dll | Select-Object -First 1).FullName
-          $meta = (Get-ChildItem client -Recurse -Filter global-metadata.dat | Select-Object -First 1).FullName
-          dotnet run --project patcher/OpenKogama.Mods.Patcher.csproj -c Release --no-build -- patch install $game $meta "$game.patched"
-          Move-Item -Force "$game.patched" $game
-          Copy-Item core/build/Release/okmod.dll (Split-Path $game)
+          $PSNativeCommandUseErrorActionPreference = $true
+          $run = "patcher/OpenKogama.Mods.Patcher.csproj"
+          $exe = Get-ChildItem client -Recurse -Filter *.exe | Where-Object { $_.Name -notmatch "crash|handler|UnityCrash" } | Select-Object -First 1
+          $game = Get-ChildItem client -Recurse -Filter GameAssembly.dll | Select-Object -First 1
+          if ($game) {
+            $meta = (Get-ChildItem client -Recurse -Filter global-metadata.dat | Select-Object -First 1).FullName
+            dotnet run --project $run -c Release --no-build -- patch install $game.FullName $meta "$($game.FullName).patched"
+            Move-Item -Force "$($game.FullName).patched" $game.FullName
+          } else {
+            $asm = (Get-ChildItem client -Recurse -Filter Assembly-CSharp.dll | Where-Object { $_.FullName -match "Managed" } | Select-Object -First 1).FullName
+            $shim = (Get-ChildItem shim/bin/Release -Recurse -Filter OkModShim.dll | Select-Object -First 1).FullName
+            dotnet run --project $run -c Release --no-build -- patch mono $asm $shim "$asm.patched"
+            Move-Item -Force "$asm.patched" $asm
+            Copy-Item $shim (Split-Path $asm)
+          }
+          Copy-Item core/build/Release/okmod.dll $exe.DirectoryName
 
       - name: play with and without scripts
         shell: pwsh

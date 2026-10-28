@@ -133,6 +133,49 @@ public sealed class Pe
         return any;
     }
 
+    public List<int>? MovableRelocations(uint rva, int length)
+    {
+        var offsets = new List<int>();
+        var (table, size) = DataDir(5);
+        if (table == 0 || size == 0) return offsets;
+        int start = Rva2Raw(table);
+        for (int block = start; block + 8 <= start + size;)
+        {
+            uint page = U32(block);
+            int blockSize = (int)U32(block + 4);
+            if (blockSize < 8) break;
+            for (int entry = block + 8; entry + 2 <= block + blockSize; entry += 2)
+            {
+                ushort value = U16(entry);
+                int type = value >> 12;
+                int width = type switch { 3 => 4, 10 => 8, _ => 0 };
+                uint at = page + (uint)(value & 0xFFF);
+                if (width == 0 || at >= rva + length || at + width <= rva) continue;
+                if (type != 3 || at < rva || at + width > rva + length) return null;
+                offsets.Add((int)(at - rva));
+            }
+            block += blockSize;
+        }
+        return offsets;
+    }
+
+    public void AddRelocations(IEnumerable<uint> rvas)
+    {
+        var (table, size) = DataDir(5);
+        var blocks = new List<byte>();
+        if (table != 0 && size != 0) blocks.AddRange(Bytes.AsSpan(Rva2Raw(table), (int)size).ToArray());
+        foreach (var page in rvas.GroupBy(rva => rva & ~0xFFFu).OrderBy(group => group.Key))
+        {
+            var entries = page.Order().Select(rva => (ushort)((3 << 12) | (int)(rva & 0xFFF))).ToList();
+            if (entries.Count % 2 == 1) entries.Add(0);
+            blocks.AddRange(BitConverter.GetBytes(page.Key));
+            blocks.AddRange(BitConverter.GetBytes((uint)(8 + entries.Count * 2)));
+            foreach (ushort entry in entries) blocks.AddRange(BitConverter.GetBytes(entry));
+        }
+        uint moved = AddSection(".okreloc", blocks.ToArray(), 0x42000040, out _);
+        SetDataDir(5, moved, (uint)blocks.Count);
+    }
+
     public ushort U16(int at) => BitConverter.ToUInt16(Bytes, at);
     public uint U32(int at) => BitConverter.ToUInt32(Bytes, at);
     int I32(int at) => BitConverter.ToInt32(Bytes, at);

@@ -16,6 +16,8 @@ OKMOD_EXPORT int okmod_gate(const char *hook) { return okmod::run_gate(hook); }
 OKMOD_EXPORT int okmod_event(const char *hook, int64_t *args, int argc, int64_t *result) {
     return okmod::run_event(hook, args, argc, result);
 }
+
+OKMOD_EXPORT int64_t okmod_address(void *handle) { return okmod::runtime_address(handle); }
 }
 
 #if defined(_WIN32)

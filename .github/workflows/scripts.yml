@@ -29,6 +29,10 @@ jobs:
             unity: 5.3.8p2
             arch: Win32
             build: kogama-188000-4625ac7c-e84e-4f6b-b594-7ad27c45eace
+          - version: 1.25.13
+            unity: 5.1.3f1
+            arch: Win32
+            build: kogama-125013-91c8d25a-2e42-4eac-af16-54dd20128614
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4

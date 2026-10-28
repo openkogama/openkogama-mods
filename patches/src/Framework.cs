@@ -24,9 +24,15 @@ public static class Framework
             if (Resolve(type, method) is uint rva && !il2cpp.Shared(rva)) sites.Add(new Hook.Site(Hook.Kind.Toggle, flag, rva, (byte)(ret ?? 0)));
             else log($"toggle {type}::{method} not found or shared, skipped");
         }
+        var hooked = new HashSet<string>();
         foreach (var (name, type, method) in Features.Hooks)
         {
-            if (Resolve(type, method) is uint rva && !il2cpp.Shared(rva)) sites.Add(new Hook.Site(Hook.Kind.Event, name, rva, 0));
+            if (hooked.Contains(name)) continue;
+            if (Resolve(type, method) is uint rva && !il2cpp.Shared(rva))
+            {
+                sites.Add(new Hook.Site(Hook.Kind.Event, name, rva, 0));
+                hooked.Add(name);
+            }
             else log($"hook {type}::{method} not found or shared, skipped");
         }
         if (sites.Count == 0) return null;

@@ -57,10 +57,13 @@ public static class MonoPatch
             module.ImportReference(okmod.Methods.First(m => m.Name == "Single")),
             DoubleBits(module),
             module.ImportReference(okmod.Fields.First(f => f.Name == "Result")));
+        var hooked = new HashSet<string>();
         foreach (Hook h in hooks)
         {
+            if (hooked.Contains(h.Event)) continue;
             if (Resolve(image, h.Type, h.Method) is not { HasBody: true } method || method.HasGenericParameters || method.DeclaringType.HasGenericParameters) continue;
             Event(method, calls, h.Event);
+            hooked.Add(h.Event);
             applied.Add($"event {h.Event} -> {h.Type}::{h.Method}");
         }
         if (applied.Count > 0) module.Write(output);

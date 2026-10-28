@@ -3,7 +3,7 @@ name: studio
 on:
   push:
     branches: [kogamastudio]
-    paths: ["mods/kogamastudio/**", "core/**", "patches/**", ".github/studio.ps1", ".github/workflows/studio.yml"]
+    paths: ["mods/kogamastudio/**", "core/**", "patches/**", ".github/game.ps1", ".github/studio.ps1", ".github/workflows/studio.yml"]
   workflow_dispatch:
 
 jobs:

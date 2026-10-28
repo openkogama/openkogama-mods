@@ -91,3 +91,37 @@ set_target_properties(framerate PROPERTIES PREFIX "" OUTPUT_NAME "framerate")
 if(WIN32)
     add_executable(loadtest test/loadtest.cpp)
 endif()
+
+# scripts: lua in a sandbox, drawn into the game's own frame
+set(SCRIPTS ${CMAKE_SOURCE_DIR}/../mods/scripts)
+set(IMGUI ${KOGAMASTUDIO}/imgui)
+file(GLOB LUA_SOURCES ${SCRIPTS}/lua/*.c)
+set_source_files_properties(${LUA_SOURCES} PROPERTIES LANGUAGE CXX COMPILE_DEFINITIONS luai_matchstep=scripts_matchstep)
+add_library(scripts_core STATIC
+    ${LUA_SOURCES}
+    ${SCRIPTS}/src/runtime.cpp
+    ${SCRIPTS}/src/api.cpp
+    ${SCRIPTS}/src/game.cpp
+    ${SCRIPTS}/src/images.cpp
+    ${SCRIPTS}/src/textures.cpp
+    ${SCRIPTS}/src/frame.cpp
+    ${IMGUI}/imgui.cpp
+    ${IMGUI}/imgui_draw.cpp
+    ${IMGUI}/imgui_tables.cpp
+    ${IMGUI}/imgui_widgets.cpp
+)
+target_include_directories(scripts_core PUBLIC ${CMAKE_SOURCE_DIR}/../include ${SCRIPTS}/lua ${SCRIPTS}/src ${IMGUI})
+target_compile_definitions(scripts_core PUBLIC NOMINMAX _CRT_SECURE_NO_WARNINGS)
+target_link_libraries(scripts_core PUBLIC windowscodecs ole32)
+if(MSVC)
+    target_compile_options(scripts_core PUBLIC /utf-8)
+endif()
+
+add_library(scripts SHARED ${SCRIPTS}/src/scripts.cpp ${SCRIPTS}/src/render.cpp ${SCRIPTS}/src/remote.cpp ${IMGUI}/imgui_impl_win32.cpp)
+target_link_libraries(scripts PRIVATE scripts_core d3d11 dxgi d3dcompiler dwmapi winhttp bcrypt shell32 user32 gdi32)
+set_target_properties(scripts PROPERTIES PREFIX "" OUTPUT_NAME "scripts")
+
+add_executable(scripts_test ${SCRIPTS}/test/scripts_test.cpp)
+target_link_libraries(scripts_test PRIVATE scripts_core)
+add_test(NAME scripts COMMAND scripts_test ${SCRIPTS}/test)
+set_tests_properties(scripts PROPERTIES TIMEOUT 120)

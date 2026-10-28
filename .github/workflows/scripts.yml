@@ -1,0 +1,78 @@
+name: scripts
+
+on:
+  push:
+    paths: ["mods/scripts/**", "core/**", "patches/**", ".github/game.ps1", ".github/scripts.ps1", ".github/workflows/scripts.yml"]
+  workflow_dispatch:
+
+jobs:
+  game:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          path: openkogama-mods
+      - name: pick the server branch
+        id: server
+        shell: bash
+        run: |
+          if git ls-remote --exit-code --heads https://github.com/openkogama/openkogama-server.git "$GITHUB_REF_NAME" > /dev/null; then echo "ref=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/checkout@v4
+        with:
+          repository: openkogama/openkogama-server
+          ref: ${{ steps.server.outputs.ref }}
+          path: server-src
+      - uses: actions/checkout@v4
+        with:
+          repository: openkogama/openkogama-photon
+          path: openkogama-photon
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: build server, core and patcher
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          dotnet build server-src/openkogama-server.csproj -c Release -o server
+          dotnet build server-src/examples/online/online.csproj -c Release -o plugins
+          cmake -S core -B core/build -A x64
+          cmake --build core/build --config Release
+          dotnet build patcher/OpenKogama.Mods.Patcher.csproj -c Release
+
+      - name: sandbox and api tests
+        run: ctest --test-dir core/build -C Release -R scripts --output-on-failure
+
+      - name: cache client 3.5.25
+        id: client
+        uses: actions/cache@v4
+        with:
+          path: client
+          key: kogama-3.5.25-119989fe
+      - name: download client 3.5.25
+        if: steps.client.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/bustersky13/kogama-version-tracker/releases/download/versions/kogama--119989fe-87c4-4d35-b53d-7ac0db503f1b.zip"
+          Invoke-WebRequest -Uri $url -OutFile client.zip
+          Expand-Archive client.zip -DestinationPath client
+
+      - name: patch client
+        shell: pwsh
+        run: |
+          $game = (Get-ChildItem client -Recurse -Filter GameAssembly.dll | Select-Object -First 1).FullName
+          $meta = (Get-ChildItem client -Recurse -Filter global-metadata.dat | Select-Object -First 1).FullName
+          dotnet run --project patcher/OpenKogama.Mods.Patcher.csproj -c Release --no-build -- patch install $game $meta "$game.patched"
+          Move-Item -Force "$game.patched" $game
+          Copy-Item core/build/Release/okmod.dll (Split-Path $game)
+
+      - name: play with and without scripts
+        shell: pwsh
+        run: ./.github/scripts.ps1 -Client client -Server server -Mods core/build/Release -Scripts mods/scripts/test/game -Plugins plugins -Out shots
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scripts
+          path: shots

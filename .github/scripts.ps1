@@ -1,4 +1,5 @@
-param([string]$Client, [string]$Server, [string]$Mods, [string]$Scripts, [string]$Plugins, [string]$Out, [string]$Template = "city", [int]$Seconds = 20)
+param([string]$Client, [string]$Server, [string]$Mods, [string]$Scripts, [string]$Plugins, [string]$Out, [string]$Version = "3.5.25", [string]$Unity = "6000.2.7f2",
+  [string]$Template = "city", [int]$Seconds = 20)
 $ErrorActionPreference = "Stop"
 New-Item -ItemType Directory -Force $Out | Out-Null
 $Out = (Resolve-Path $Out).Path
@@ -48,7 +49,7 @@ function Session([string]$name, [string[]]$load, [switch]$Hud) {
   $rates = Join-Path $dir "framerate.txt"
   Remove-Item $rates -ErrorAction SilentlyContinue
 
-  $url = "http://127.0.0.1:8080/session?mode=play&world=$world&key=$name&client=3.5.25&unity=6000.2.7f2"
+  $url = "http://127.0.0.1:8080/session?mode=play&world=$world&key=$name&client=$Version&unity=$Unity"
   $package = "kogamaPackage:" + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($url))
   $game = Start-Process $exe.FullName -WorkingDirectory $dir -PassThru -ArgumentList @($package, "-logFile", (Join-Path $Out "$name-client.txt"),
     "-screen-fullscreen", "0", "-screen-width", "960", "-screen-height", "540")

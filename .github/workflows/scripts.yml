@@ -9,6 +9,18 @@ jobs:
   game:
     runs-on: windows-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: 3.5.25
+            unity: 6000.2.7f2
+            arch: x64
+            build: kogama--119989fe-87c4-4d35-b53d-7ac0db503f1b
+          - version: 3.1.95
+            unity: 2022.3.43f1
+            arch: Win32
+            build: kogama-301095-0eb09042-57bc-4932-af97-6ed48e1afc4f
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -37,25 +49,24 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           dotnet build server-src/openkogama-server.csproj -c Release -o server
           dotnet build server-src/examples/online/online.csproj -c Release -o plugins
-          cmake -S core -B core/build -A x64
+          cmake -S core -B core/build -A ${{ matrix.arch }}
           cmake --build core/build --config Release
           dotnet build patcher/OpenKogama.Mods.Patcher.csproj -c Release
 
       - name: sandbox and api tests
         run: ctest --test-dir core/build -C Release -R scripts --output-on-failure
 
-      - name: cache client 3.5.25
+      - name: cache client ${{ matrix.version }}
         id: client
         uses: actions/cache@v4
         with:
           path: client
-          key: kogama-3.5.25-119989fe
-      - name: download client 3.5.25
+          key: ${{ matrix.build }}
+      - name: download client ${{ matrix.version }}
         if: steps.client.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          $url = "https://github.com/bustersky13/kogama-version-tracker/releases/download/versions/kogama--119989fe-87c4-4d35-b53d-7ac0db503f1b.zip"
-          Invoke-WebRequest -Uri $url -OutFile client.zip
+          Invoke-WebRequest -Uri "https://github.com/bustersky13/kogama-version-tracker/releases/download/versions/${{ matrix.build }}.zip" -OutFile client.zip
           Expand-Archive client.zip -DestinationPath client
 
       - name: patch client
@@ -69,10 +80,10 @@ jobs:
 
       - name: play with and without scripts
         shell: pwsh
-        run: ./.github/scripts.ps1 -Client client -Server server -Mods core/build/Release -Scripts mods/scripts/test/game -Plugins plugins -Out shots
+        run: ./.github/scripts.ps1 -Client client -Server server -Mods core/build/Release -Scripts mods/scripts/test/game -Plugins plugins -Out shots -Version ${{ matrix.version }} -Unity ${{ matrix.unity }}
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: scripts
+          name: scripts-${{ matrix.version }}
           path: shots

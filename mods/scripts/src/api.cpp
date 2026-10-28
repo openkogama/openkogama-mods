@@ -2,6 +2,7 @@
 #include "runtime.h"
 #include "game.h"
 #include "images.h"
+#include "frame.h"
 #include "lua.h"
 #include "lauxlib.h"
 #include "imgui.h"
@@ -24,6 +25,11 @@ namespace api {
         constexpr size_t QueueLimit = 256;
         constexpr size_t MessageLimit = 64u << 10;
         constexpr size_t WindowLimit = 32;
+        constexpr size_t ElementLimit = 256;
+        constexpr size_t PolyLimit = 256;
+        constexpr size_t PolysLimit = 100000;
+        constexpr size_t PointsLimit = 400000;
+        constexpr double KeepSeconds = 0.1;
 
         struct Held {
             std::string name;
@@ -114,6 +120,20 @@ namespace api {
         std::map<std::string, Held> keys;
         std::vector<KeyEvent> queue;
         std::map<std::string, std::set<std::string>> windowsOf;
+
+        struct Hiding {
+            std::set<std::string> holders;
+            std::map<int, game::Saved> saved;
+        };
+
+        std::map<std::string, Hiding> hidden;
+        std::set<std::string> blockers;
+        std::set<std::string> cursorHolders;
+        bool cursorWasLocked = false;
+        std::map<std::string, std::set<std::string>> consumedBy;
+        double wheelPending = 0;
+        double wheelFrame = 0;
+        double keepClock = 0;
 
         std::string Lower(const std::string& text) {
             std::string lower = text;
@@ -401,6 +421,21 @@ namespace api {
             return 2;
         }
 
+        bool Nearest(lua_State* L, int options) {
+            std::string filter = Text(L, options, "filter");
+            if (filter.empty() || filter == "linear") return false;
+            if (filter != "nearest") luaL_error(L, "option 'filter' is \"linear\" or \"nearest\"");
+            return true;
+        }
+
+        void Filtered(ImDrawList* list, bool nearest) {
+            if (nearest) list->AddCallback(frame::Sampler, &frame::Nearest);
+        }
+
+        void Unfiltered(ImDrawList* list, bool nearest) {
+            if (nearest) list->AddCallback(frame::Sampler, nullptr);
+        }
+
         int HudImage(lua_State* L) {
             NeedDraw(L);
             images::Image image = images::Get(L, luaL_checkstring(L, 1));
@@ -408,10 +443,81 @@ namespace api {
             float w = (float)luaL_optnumber(L, 4, image.width), h = (float)luaL_optnumber(L, 5, image.height);
             ImU32 tint = ColorOption(L, 6, "color", IM_COL32_WHITE);
             float rounding = Number(L, 6, "rounding", 0.0f);
+            bool nearest = Nearest(L, 6);
             if (!image.texture) return 0;
             ImTextureRef texture((ImTextureID)image.texture);
+            Filtered(Hud(), nearest);
             if (rounding > 0) Hud()->AddImageRounded(texture, ImVec2(x, y), ImVec2(x + w, y + h), ImVec2(0, 0), ImVec2(1, 1), tint, rounding);
             else Hud()->AddImage(texture, ImVec2(x, y), ImVec2(x + w, y + h), ImVec2(0, 0), ImVec2(1, 1), tint);
+            Unfiltered(Hud(), nearest);
+            return 0;
+        }
+
+        std::vector<ImVec2> Points(lua_State* L, int index, size_t first, size_t count) {
+            std::vector<ImVec2> points(count);
+            for (size_t i = 0; i < count; i++) {
+                lua_rawgeti(L, index, (lua_Integer)(first + i * 2 + 1));
+                lua_rawgeti(L, index, (lua_Integer)(first + i * 2 + 2));
+                if (!lua_isnumber(L, -2) || !lua_isnumber(L, -1)) luaL_error(L, "points are numbers x1, y1, x2, y2, ...");
+                points[i] = ImVec2((float)lua_tonumber(L, -2), (float)lua_tonumber(L, -1));
+                lua_pop(L, 2);
+            }
+            return points;
+        }
+
+        void Fill(const std::vector<ImVec2>& points, size_t first, size_t count, ImU32 color, bool smooth) {
+            ImDrawList* list = Hud();
+            ImDrawListFlags flags = list->Flags;
+            if (!smooth) list->Flags &= ~ImDrawListFlags_AntiAliasedFill;
+            list->AddConvexPolyFilled(points.data() + first, (int)count, color);
+            list->Flags = flags;
+        }
+
+        int HudPoly(lua_State* L) {
+            NeedDraw(L);
+            luaL_checktype(L, 1, LUA_TTABLE);
+            size_t length = lua_rawlen(L, 1);
+            if (length % 2 != 0 || length < 6 || length > PolyLimit * 2) return luaL_argerror(L, 1, "a polygon is 3 to 256 points as x1, y1, x2, y2, ...");
+            ImU32 color = Color(L, 2, IM_COL32_WHITE);
+            bool smooth = Flag(L, 3, "smooth", true);
+            std::vector<ImVec2> points = Points(L, 1, 0, length / 2);
+            Fill(points, 0, points.size(), color, smooth);
+            return 0;
+        }
+
+        int HudPolys(lua_State* L) {
+            NeedDraw(L);
+            luaL_checktype(L, 1, LUA_TTABLE);
+            luaL_checktype(L, 3, LUA_TTABLE);
+            size_t polygons = lua_rawlen(L, 3), length = lua_rawlen(L, 1);
+            if (polygons > PolysLimit) return luaL_argerror(L, 3, "up to 100000 polygons a call");
+            if (length % 2 != 0 || length > PointsLimit * 2) return luaL_argerror(L, 1, "up to 400000 points as x1, y1, x2, y2, ...");
+            bool shared = !lua_istable(L, 2);
+            ImU32 color = shared ? Color(L, 2, IM_COL32_WHITE) : IM_COL32_WHITE;
+            if (!shared && lua_rawlen(L, 2) < polygons) return luaL_argerror(L, 2, "one color for each polygon, or one color for all");
+            bool smooth = Flag(L, 4, "smooth", false);
+            std::vector<size_t> counts(polygons);
+            size_t total = 0;
+            for (size_t i = 0; i < polygons; i++) {
+                lua_rawgeti(L, 3, (lua_Integer)i + 1);
+                lua_Integer count = lua_isinteger(L, -1) ? lua_tointeger(L, -1) : 0;
+                lua_pop(L, 1);
+                if (count < 3 || count > (lua_Integer)PolyLimit) return luaL_argerror(L, 3, "every polygon has 3 to 256 points");
+                counts[i] = (size_t)count;
+                total += counts[i];
+            }
+            if (total * 2 != length) return luaL_argerror(L, 1, "the points do not add up to the counts");
+            std::vector<ImVec2> points = Points(L, 1, 0, total);
+            size_t first = 0;
+            for (size_t i = 0; i < polygons; i++) {
+                if (!shared) {
+                    lua_rawgeti(L, 2, (lua_Integer)i + 1);
+                    color = Color(L, lua_gettop(L), IM_COL32_WHITE);
+                    lua_pop(L, 1);
+                }
+                Fill(points, first, counts[i], color, smooth);
+                first += counts[i];
+            }
             return 0;
         }
 
@@ -565,8 +671,14 @@ namespace api {
             NeedWindow(L);
             images::Image image = images::Get(L, luaL_checkstring(L, 1));
             float w = (float)luaL_optnumber(L, 2, image.width), h = (float)luaL_optnumber(L, 3, image.height);
-            if (image.texture) ImGui::Image(ImTextureRef((ImTextureID)image.texture), ImVec2(w, h));
-            else ImGui::Dummy(ImVec2(w, h));
+            bool nearest = Nearest(L, 4);
+            if (!image.texture) {
+                ImGui::Dummy(ImVec2(w, h));
+                return 0;
+            }
+            Filtered(ImGui::GetWindowDrawList(), nearest);
+            ImGui::Image(ImTextureRef((ImTextureID)image.texture), ImVec2(w, h));
+            Unfiltered(ImGui::GetWindowDrawList(), nearest);
             return 0;
         }
 
@@ -646,6 +758,138 @@ namespace api {
             return 1;
         }
 
+        int ServerFile(lua_State* L) {
+            std::string id = luaL_checkstring(L, 1);
+            if (!images::Served(id)) return luaL_argerror(L, 1, "a file id is the 64 hex digits the server gives");
+            images::State state = images::Want(id);
+            lua_pushstring(L, state == images::State::Ready ? "ready" : state == images::State::Loading ? "loading" : "failed");
+            return 1;
+        }
+
+        std::string Element(lua_State* L, int index) {
+            size_t length = 0;
+            const char* text = luaL_optlstring(L, index, "", &length);
+            if (length > ElementLimit) luaL_argerror(L, index, "names are up to 256 characters");
+            for (size_t i = 0; i < length; i++)
+                if ((unsigned char)text[i] < 32) luaL_argerror(L, index, "names are plain text");
+            return std::string(text, length);
+        }
+
+        bool Visible(const std::vector<game::Part>& parts) {
+            return std::any_of(parts.begin(), parts.end(), [](const game::Part& part) { return part.shown; });
+        }
+
+        bool Enabled(const std::vector<game::Part>& parts) {
+            return std::any_of(parts.begin(), parts.end(), [](const game::Part& part) { return part.active; });
+        }
+
+        void Release(const std::string& element, const std::string& script) {
+            auto found = hidden.find(element);
+            if (found == hidden.end() || !found->second.holders.erase(script) || !found->second.holders.empty()) return;
+            std::map<int, game::Saved> saved = std::move(found->second.saved);
+            hidden.erase(found);
+            game::Restore(element, saved);
+        }
+
+        int HudHide(lua_State* L) {
+            std::string element = Element(L, 1);
+            std::vector<game::Part> parts = game::Parts(element);
+            if (parts.empty()) {
+                lua_pushboolean(L, 0);
+                return 1;
+            }
+            Hiding& hiding = hidden[element];
+            hiding.holders.insert(runtime::Name(L));
+            game::Hide(element, hiding.saved);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+
+        int HudShow(lua_State* L) {
+            std::string element = Element(L, 1);
+            auto found = hidden.find(element);
+            if (found != hidden.end()) {
+                found->second.holders.erase(runtime::Name(L));
+                if (!found->second.holders.empty()) {
+                    lua_pushboolean(L, 0);
+                    return 1;
+                }
+                std::map<int, game::Saved> saved = std::move(found->second.saved);
+                hidden.erase(found);
+                game::Restore(element, saved);
+            }
+            lua_pushboolean(L, !game::Parts(element).empty());
+            return 1;
+        }
+
+        int HudShown(lua_State* L) {
+            std::vector<game::Part> parts = game::Parts(Element(L, 1));
+            if (parts.empty()) lua_pushnil(L);
+            else lua_pushboolean(L, Visible(parts));
+            return 1;
+        }
+
+        int HudActive(lua_State* L) {
+            std::vector<game::Part> parts = game::Parts(Element(L, 1));
+            if (parts.empty()) lua_pushnil(L);
+            else lua_pushboolean(L, Enabled(parts));
+            return 1;
+        }
+
+        int InputBlock(lua_State* L) {
+            if (lua_toboolean(L, 1)) blockers.insert(runtime::Name(L));
+            else blockers.erase(runtime::Name(L));
+            return 0;
+        }
+
+        void ReleaseCursor(const std::string& script) {
+            if (cursorHolders.erase(script) && cursorHolders.empty() && cursorWasLocked) game::LockCursor();
+        }
+
+        int InputCursor(lua_State* L) {
+            if (!lua_toboolean(L, 1)) {
+                ReleaseCursor(runtime::Name(L));
+                return 0;
+            }
+            if (cursorHolders.empty()) cursorWasLocked = game::CursorLocked();
+            cursorHolders.insert(runtime::Name(L));
+            game::FreeCursor();
+            return 0;
+        }
+
+        int InputWheel(lua_State* L) {
+            lua_pushnumber(L, wheelFrame);
+            return 1;
+        }
+
+        int InputConsume(lua_State* L) {
+            std::string key = Lower(luaL_checkstring(L, 1));
+            bool on = lua_isnoneornil(L, 2) || lua_toboolean(L, 2);
+            std::set<std::string>& keysOf = consumedBy[runtime::Name(L)];
+            if (on) keysOf.insert(key);
+            else keysOf.erase(key);
+            return 0;
+        }
+
+        int InputLocked(lua_State* L) {
+            lua_pushboolean(L, game::CursorLocked());
+            return 1;
+        }
+
+        int HudList(lua_State* L) {
+            std::vector<std::string> names;
+            if (!game::Children(Element(L, 1), names)) {
+                lua_pushnil(L);
+                return 1;
+            }
+            lua_createtable(L, (int)names.size(), 0);
+            for (size_t i = 0; i < names.size(); i++) {
+                lua_pushlstring(L, names[i].data(), names[i].size());
+                lua_rawseti(L, -2, (lua_Integer)i + 1);
+            }
+            return 1;
+        }
+
         void Library(lua_State* L, const char* name, const luaL_Reg* functions) {
             lua_newtable(L);
             luaL_setfuncs(L, functions, 0);
@@ -664,7 +908,7 @@ namespace api {
     void Register(lua_State* L) {
         static const luaL_Reg draw[] = {
             {"rect", HudRect}, {"line", HudLine}, {"circle", HudCircle}, {"text", HudText},
-            {"measure", HudMeasure}, {"image", HudImage}, {nullptr, nullptr},
+            {"measure", HudMeasure}, {"image", HudImage}, {"poly", HudPoly}, {"polys", HudPolys}, {nullptr, nullptr},
         };
         static const luaL_Reg ui[] = {
             {"window", UiWindow}, {"style", UiStyle}, {"with", UiWith}, {"text", UiText}, {"button", UiButton}, {"checkbox", UiCheckbox},
@@ -672,10 +916,11 @@ namespace api {
             {"separator", UiSeparator}, {"sameline", UiSameLine}, {"spacing", UiSpacing}, {nullptr, nullptr},
         };
         static const luaL_Reg screen[] = {{"size", ScreenSize}, {nullptr, nullptr}};
-        static const luaL_Reg input[] = {{"down", InputDown}, {"mouse", InputMouse}, {nullptr, nullptr}};
+        static const luaL_Reg input[] = {{"down", InputDown}, {"mouse", InputMouse}, {"locked", InputLocked}, {"block", InputBlock}, {"cursor", InputCursor}, {"wheel", InputWheel}, {"consume", InputConsume}, {nullptr, nullptr}};
         static const luaL_Reg player[] = {{"position", PlayerPosition}, {"name", PlayerName}, {nullptr, nullptr}};
         static const luaL_Reg camera[] = {{"position", CameraPosition}, {nullptr, nullptr}};
-        static const luaL_Reg server[] = {{"send", ServerSend}, {nullptr, nullptr}};
+        static const luaL_Reg server[] = {{"send", ServerSend}, {"file", ServerFile}, {nullptr, nullptr}};
+        static const luaL_Reg hud[] = {{"hide", HudHide}, {"show", HudShow}, {"shown", HudShown}, {"active", HudActive}, {"list", HudList}, {nullptr, nullptr}};
         Library(L, "draw", draw);
         Library(L, "ui", ui);
         Library(L, "screen", screen);
@@ -683,6 +928,7 @@ namespace api {
         Library(L, "player", player);
         Library(L, "camera", camera);
         Library(L, "server", server);
+        Library(L, "hud", hud);
         lua_pushcfunction(L, Rgb);
         lua_setglobal(L, "rgb");
     }
@@ -717,7 +963,49 @@ namespace api {
         windows = 0;
     }
 
-    void Forget(const std::string& script) { windowsOf.erase(script); }
+    void Forget(const std::string& script) {
+        windowsOf.erase(script);
+        blockers.erase(script);
+        ReleaseCursor(script);
+        consumedBy.erase(script);
+        std::vector<std::string> mine;
+        for (const auto& entry : hidden)
+            if (entry.second.holders.count(script)) mine.push_back(entry.first);
+        for (const std::string& element : mine) Release(element, script);
+    }
+
+    bool Blocking() { return !blockers.empty(); }
+
+    void Unblock() {
+        blockers.clear();
+        cursorHolders.clear();
+    }
+
+    void Wheel(double notches) { wheelPending += notches; }
+
+    double TakeWheel() {
+        wheelFrame = wheelPending;
+        wheelPending = 0;
+        return wheelFrame;
+    }
+
+    bool Consumed(const std::string& name) {
+        std::string key = Lower(name);
+        for (const auto& entry : consumedBy)
+            if (entry.second.count(key)) return true;
+        return false;
+    }
+
+    void HoldCursor() {
+        if (!cursorHolders.empty()) game::FreeCursor();
+    }
+
+    void Maintain(double dt) {
+        keepClock += dt;
+        if (keepClock < KeepSeconds) return;
+        keepClock = 0;
+        for (auto& entry : hidden) game::Hide(entry.first, entry.second.saved);
+    }
 
     void Key(const std::string& name, bool down) {
         Held& held = keys[Lower(name)];

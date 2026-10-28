@@ -42,6 +42,10 @@ namespace frame {
         }
     }
 
+    int Nearest = 1;
+
+    void Sampler(const ImDrawList*, const ImDrawCmd*) {}
+
     std::unique_ptr<Frame> Build(ImDrawData* data) {
         auto frame = std::make_unique<Frame>();
         if (!data) return frame;
@@ -55,9 +59,12 @@ namespace frame {
             int base = (int)frame->vertices.size();
             frame->vertices.insert(frame->vertices.end(), list->VtxBuffer.begin(), list->VtxBuffer.end());
             frame->indices.insert(frame->indices.end(), list->IdxBuffer.begin(), list->IdxBuffer.end());
+            bool nearest = false;
             for (const ImDrawCmd& command : list->CmdBuffer) {
+                if (command.UserCallback == Sampler) nearest = command.UserCallbackData == &Nearest;
+                else if (command.UserCallback == ImDrawCallback_ResetRenderState) nearest = false;
                 if (command.UserCallback || command.ElemCount == 0) continue;
-                frame->commands.push_back({command.ClipRect, command.GetTexID(), first + command.IdxOffset, command.ElemCount, base + (int)command.VtxOffset});
+                frame->commands.push_back({command.ClipRect, command.GetTexID(), first + command.IdxOffset, command.ElemCount, base + (int)command.VtxOffset, nearest});
             }
         }
         return frame;

@@ -1,4 +1,5 @@
 #pragma once
+#include "images.h"
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -14,4 +15,5 @@ namespace remote {
     void Stop();
     bool Send(const std::string& name, const std::string& data);
     std::vector<Message> Take();
+    images::State Want(const std::string& id, std::filesystem::path& path);
 }

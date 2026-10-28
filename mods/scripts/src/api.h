@@ -19,6 +19,13 @@ namespace api {
     void BeginDraw();
     void EndDraw();
     void Forget(const std::string& script);
+    void Maintain(double dt);
+    bool Blocking();
+    void Unblock();
+    void Wheel(double notches);
+    double TakeWheel();
+    bool Consumed(const std::string& name);
+    void HoldCursor();
     void Key(const std::string& name, bool down);
     void ReleaseKeys();
     std::vector<KeyEvent> TakeKeys();

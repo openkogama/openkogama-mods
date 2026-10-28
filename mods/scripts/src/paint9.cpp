@@ -240,6 +240,9 @@ namespace paint9 {
                     if (rect.right <= rect.left || rect.bottom <= rect.top) continue;
                     device->SetScissorRect(&rect);
                     device->SetTexture(0, uploaded);
+                    D3DTEXTUREFILTERTYPE filter = command.nearest ? D3DTEXF_POINT : D3DTEXF_LINEAR;
+                    device->SetSamplerState(0, D3DSAMP_MINFILTER, filter);
+                    device->SetSamplerState(0, D3DSAMP_MAGFILTER, filter);
                     device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, command.base, 0, count - (UINT)command.base, command.first, command.count / 3);
                 }
                 device->EndScene();

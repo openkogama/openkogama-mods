@@ -1,5 +1,6 @@
 #include "api.h"
 #include "frame.h"
+#include "images.h"
 #include "runtime.h"
 #include "textures.h"
 #include "imgui.h"
@@ -24,6 +25,13 @@ namespace {
     std::vector<std::string> lines;
     std::vector<std::string> sent;
     int failed = 0;
+    fs::path served;
+
+    images::State Serve(const std::string& id, fs::path& path) {
+        path = served;
+        if (id == std::string(64, 'a')) return images::State::Ready;
+        return id == std::string(64, 'b') ? images::State::Loading : images::State::Failed;
+    }
 
     bool Record(const std::string& name, const std::string& data) {
         sent.push_back(name + " " + data);
@@ -55,6 +63,7 @@ namespace {
     struct Result {
         size_t vertices = 0;
         size_t pictures = 0;
+        size_t nearest = 0;
         size_t atlases = 0;
         double slowest = 0;
     };
@@ -69,11 +78,14 @@ namespace {
             api::LoadFonts();
             ImGui::NewFrame();
             auto drawing = std::chrono::steady_clock::now();
+            images::Sweep();
             runtime::Draw();
             scripts += std::chrono::duration<double>(std::chrono::steady_clock::now() - drawing).count();
             ImGui::Render();
             auto frame = frame::Build(ImGui::GetDrawData());
             result.vertices = std::max(result.vertices, frame->vertices.size());
+            for (const frame::Command& command : frame->commands)
+                if (command.nearest) result.nearest++;
             for (const textures::Op& op : textures::Take()) {
                 if (op.kind != textures::Op::Create) continue;
                 if (op.width == 2 && op.height == 1) result.pictures++;
@@ -95,9 +107,12 @@ int main(int argc, char** argv) {
     fs::create_directories(folder);
     fs::copy(fs::u8path(argv[1]) / "scripts", folder, fs::copy_options::recursive);
     std::ofstream(folder / "hud" / "dot.png", std::ios::binary).write(reinterpret_cast<const char*>(Picture), sizeof(Picture));
+    served = folder / "hud" / "served.png";
+    std::ofstream(served, std::ios::binary).write(reinterpret_cast<const char*>(Picture), sizeof(Picture));
 
     runtime::SetLogger(Collect);
     api::SetSender(Record);
+    images::SetSource(Serve);
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
@@ -111,6 +126,8 @@ int main(int argc, char** argv) {
     Run(5, result);
     api::Key("F7", true);
     api::Key("F7", false);
+    api::Wheel(1);
+    api::Wheel(1);
     runtime::Emit("world");
     runtime::Emit("message", {runtime::Arg::Of(std::string("test:reply")), runtime::Arg::Of(std::string("42"))});
     Run(40, result);
@@ -132,9 +149,16 @@ int main(int argc, char** argv) {
     Expect(Logged("broken", "unexpected symbol"), "a syntax error is reported");
     Expect(result.vertices > 0, "the hud produces geometry");
     Expect(Logged("hud", "styles ok"), "styles take imgui's names and refuse the rest");
+    Expect(Logged("hud", "hud without a game"), "hud answers nothing without a game and refuses bad names");
+    Expect(api::Blocking(), "a script can keep the game's input to itself");
+    Expect(Logged("hud", "wheel 2.0 2.0"), "the mouse wheel reaches scripts as one delta a frame");
+    Expect(api::Consumed("F9") && !api::Consumed("F4"), "scripts take keys from the game and give them back");
     Expect(ImGui::GetIO().Fonts->Fonts.Size >= 3, "scripts pick fonts of the Windows Fonts folder");
     Expect(result.atlases > 0, "the font atlas is uploaded");
-    Expect(result.pictures == 1, "an image is decoded once");
+    Expect(result.pictures == 2, "an image is decoded once, a file from the server too");
+    Expect(Logged("hud", "server files ok"), "files from the server draw by id once they are there and tell how they are coming");
+    Expect(result.nearest > 0, "images can be drawn with nearest filtering");
+    Expect(Logged("hud", "shapes ok"), "polygons draw one at a time and in bulk and refuse bad shapes");
     Expect(result.slowest < 1.0, "no frame takes longer than a second");
 
     fs::create_directories(folder / "reload");
@@ -148,6 +172,7 @@ int main(int argc, char** argv) {
     Expect(Logged("reload", "version 1") && Logged("reload", "version 2") && Logged("reload", "removed"), "scripts reload when their files change");
 
     runtime::Close();
+    Expect(!api::Blocking() && !api::Consumed("F9"), "the input goes back to the game when its script stops");
     ImGui::DestroyContext();
     fs::remove_all(folder, error);
     std::printf("%d failed\n", failed);

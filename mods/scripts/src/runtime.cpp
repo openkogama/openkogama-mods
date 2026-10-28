@@ -569,6 +569,8 @@ namespace runtime {
 
     void Tick(double dt) {
         for (const api::KeyEvent& key : api::TakeKeys()) Emit("key", {Arg::Of(key.name), Arg::Of(key.down)});
+        double wheel = api::TakeWheel();
+        if (wheel != 0) Emit("wheel", {Arg::Of(wheel)});
         std::vector<Arg> args{Arg::Of(dt)};
         for (auto& script : scripts) {
             if (!script->L || script->stopped) continue;

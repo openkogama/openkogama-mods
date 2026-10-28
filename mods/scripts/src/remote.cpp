@@ -4,10 +4,12 @@
 #include <winhttp.h>
 #include <bcrypt.h>
 #include <shellapi.h>
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -24,11 +26,16 @@ namespace remote {
         constexpr size_t ManifestLimit = 1u << 20;
         constexpr size_t FileLimit = 1u << 20;
         constexpr size_t TotalLimit = 16u << 20;
-        constexpr size_t FileCount = 64;
+        constexpr size_t FileCount = 1024;
         constexpr size_t MessageLimit = 64u << 10;
         constexpr size_t PollLimit = 4u << 20;
         constexpr size_t QueueLimit = 256;
         constexpr std::chrono::seconds Interval(5);
+        constexpr size_t Pullers = 4;
+        constexpr size_t WantedLimit = 65536;
+        constexpr std::chrono::seconds RetryAfter(30);
+        constexpr uintmax_t DownloadsLimit = 256u << 20;
+        constexpr std::chrono::hours DownloadsAge(24 * 7);
 
         struct Entry {
             std::string path;
@@ -38,10 +45,16 @@ namespace remote {
 
         using Manifest = std::map<std::string, std::vector<Entry>>;
 
+        struct Wanted {
+            images::State state = images::State::Loading;
+            std::chrono::steady_clock::time_point since;
+        };
+
         std::string root;
         std::string key;
         fs::path folder;
         fs::path store;
+        fs::path downloads;
         std::mutex lock;
         std::condition_variable wake;
         std::atomic<bool> stopping{false};
@@ -54,6 +67,10 @@ namespace remote {
         bool reachable = true;
         std::string announced;
         std::map<std::string, std::string> applied;
+        std::mutex pulls;
+        std::map<std::string, Wanted> wanted;
+        std::deque<std::string> waiting;
+        size_t pulling = 0;
 
         std::wstring Wide(const std::string& text) {
             if (text.empty()) return {};
@@ -295,20 +312,71 @@ namespace remote {
             return manifest;
         }
 
-        bool Fetch(const Entry& entry) {
+        bool Keep(const fs::path& place, const std::string& hash, const std::string& body) {
             std::error_code error;
-            fs::path file = store / entry.hash;
-            if (fs::exists(file, error)) return true;
-            std::string body;
-            if (!Get("/api/scripts/" + entry.hash, body, FileLimit) || Sha256(body) != entry.hash) return false;
-            fs::path partial = store / (entry.hash + ".part");
+            fs::create_directories(place, error);
+            fs::path partial = place / (hash + ".part");
             {
                 std::ofstream out(partial, std::ios::binary);
                 out.write(body.data(), (std::streamsize)body.size());
                 if (!out) return false;
             }
-            fs::rename(partial, file, error);
+            fs::rename(partial, place / hash, error);
             return !error;
+        }
+
+        bool Fetch(const Entry& entry) {
+            std::error_code error;
+            if (fs::exists(store / entry.hash, error)) return true;
+            std::string body;
+            return Get("/api/scripts/" + entry.hash, body, FileLimit) && Sha256(body) == entry.hash && Keep(store, entry.hash, body);
+        }
+
+        bool Download(const std::string& id) {
+            std::string body;
+            return Get("/api/scripts/" + id + "?key=" + key, body, FileLimit) && Sha256(body) == id && Keep(downloads, id, body);
+        }
+
+        void Pulling() {
+            std::unique_lock<std::mutex> guard(pulls);
+            while (!waiting.empty() && !stopping) {
+                std::string id = waiting.front();
+                waiting.pop_front();
+                guard.unlock();
+                bool done = Download(id);
+                guard.lock();
+                Wanted& entry = wanted[id];
+                entry.state = done ? images::State::Ready : images::State::Failed;
+                entry.since = std::chrono::steady_clock::now();
+            }
+            pulling--;
+        }
+
+        void Prune() {
+            struct Kept {
+                fs::file_time_type time;
+                uintmax_t size;
+                fs::path path;
+            };
+            std::vector<Kept> kept;
+            uintmax_t total = 0;
+            fs::file_time_type now = fs::file_time_type::clock::now();
+            std::error_code error;
+            for (fs::directory_iterator entry(downloads, error), end; !error && entry != end; entry.increment(error)) {
+                std::error_code timeError, sizeError;
+                Kept file{entry->last_write_time(timeError), entry->file_size(sizeError), entry->path()};
+                if (timeError || sizeError || file.path.extension() == ".part" || now - file.time > DownloadsAge) fs::remove(file.path, timeError);
+                else {
+                    total += file.size;
+                    kept.push_back(file);
+                }
+            }
+            std::sort(kept.begin(), kept.end(), [](const Kept& a, const Kept& b) { return a.time < b.time; });
+            for (const Kept& file : kept) {
+                if (total <= DownloadsLimit) break;
+                fs::remove(file.path, error);
+                total -= file.size;
+            }
         }
 
         bool Apply(const std::string& name, const std::vector<Entry>& files) {
@@ -391,6 +459,8 @@ namespace remote {
         if (root.empty()) return {};
         folder = cache / fs::u8path(Place(root));
         store = cache / ".files";
+        downloads = cache / ".downloads";
+        Prune();
         std::error_code error;
         for (fs::directory_iterator entry(folder, error), end; !error && entry != end; entry.increment(error))
             fs::remove_all(entry->path(), error);
@@ -433,5 +503,26 @@ namespace remote {
         std::vector<Message> taken;
         taken.swap(incoming);
         return taken;
+    }
+
+    images::State Want(const std::string& id, fs::path& path) {
+        if (root.empty() || key.empty() || !images::Served(id)) return images::State::Failed;
+        path = downloads / id;
+        std::lock_guard<std::mutex> guard(pulls);
+        auto found = wanted.find(id);
+        if (found != wanted.end() && (found->second.state != images::State::Failed || std::chrono::steady_clock::now() - found->second.since < RetryAfter))
+            return found->second.state;
+        if (found == wanted.end() && wanted.size() >= WantedLimit) return images::State::Failed;
+        Wanted& entry = wanted[id];
+        std::error_code error;
+        entry.state = fs::exists(path, error) ? images::State::Ready : images::State::Loading;
+        if (entry.state == images::State::Loading) {
+            waiting.push_back(id);
+            if (pulling < Pullers) {
+                pulling++;
+                std::thread(Pulling).detach();
+            }
+        }
+        return entry.state;
     }
 }

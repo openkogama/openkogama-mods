@@ -1,6 +1,7 @@
 #include "okmod.h"
 #include "api.h"
 #include "game.h"
+#include "images.h"
 #include "remote.h"
 #include "render.h"
 #include "runtime.h"
@@ -64,10 +65,19 @@ namespace {
         for (const remote::Message& message : remote::Take())
             runtime::Emit("message", {runtime::Arg::Of(message.name), runtime::Arg::Of(message.data)});
         runtime::Tick(dt);
+        api::Maintain(dt);
+        api::HoldCursor();
+        if (api::Blocking()) game::SuppressInput();
+        images::Sweep();
         render::Frame();
     }
 
+    void OnLateFrame(ok_call*, void*) {
+        if (started) api::HoldCursor();
+    }
+
     void OnWorld(ok_call*, void*) {
+        api::Unblock();
         loading = true;
         loaded = Clock::now();
     }
@@ -86,8 +96,10 @@ namespace {
         runtime::SetLogger(Write);
         server = remote::Start(GameFolder() / "scripts-server");
         api::SetSender(remote::Send);
+        images::SetSource(remote::Want);
         api->on("frame", OnFrame, nullptr);
         api->on("world.loaded", OnWorld, nullptr);
+        api->on("frame.late", OnLateFrame, nullptr);
         api->on("app.quit", OnQuit, nullptr);
         return 0;
     }

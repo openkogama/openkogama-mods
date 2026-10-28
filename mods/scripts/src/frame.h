@@ -10,6 +10,7 @@ namespace frame {
         unsigned first;
         unsigned count;
         int base;
+        bool nearest;
     };
 
     struct Frame {
@@ -19,5 +20,8 @@ namespace frame {
         std::vector<Command> commands;
     };
 
+    extern int Nearest;
+
+    void Sampler(const ImDrawList* list, const ImDrawCmd* command);
     std::unique_ptr<Frame> Build(ImDrawData* data);
 }

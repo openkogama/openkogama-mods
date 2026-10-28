@@ -53,6 +53,7 @@ namespace render {
             ID3D11RasterizerState* raster = nullptr;
             ID3D11DepthStencilState* depth = nullptr;
             ID3D11SamplerState* sampler = nullptr;
+            ID3D11SamplerState* point = nullptr;
             IDXGISwapChain* chain = nullptr;
             ID3D11RenderTargetView* target = nullptr;
             UINT width = 0;
@@ -185,7 +186,61 @@ namespace render {
                 case WM_RBUTTONUP: api::Key("MouseRight", false); break;
                 case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK: api::Key("MouseMiddle", true); break;
                 case WM_MBUTTONUP: api::Key("MouseMiddle", false); break;
+                case WM_MOUSEWHEEL: api::Wheel((double)GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA); break;
                 case WM_KILLFOCUS: api::ReleaseKeys(); break;
+            }
+        }
+
+        bool eatCharacter = false;
+
+        const char* ButtonName(UINT message) {
+            switch (message) {
+                case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: case WM_LBUTTONUP: return "MouseLeft";
+                case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK: case WM_RBUTTONUP: return "MouseRight";
+                case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK: case WM_MBUTTONUP: return "MouseMiddle";
+                default: return nullptr;
+            }
+        }
+
+        bool Eaten(UINT message, WPARAM wParam, LPARAM lParam) {
+            if ((message == WM_SYSKEYDOWN || message == WM_SYSKEYUP) && (lParam & (1 << 29))) {
+                if (message == WM_SYSKEYDOWN) eatCharacter = false;
+                return false;
+            }
+            char buffer[8];
+            const char* name = nullptr;
+            if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN || message == WM_KEYUP || message == WM_SYSKEYUP) name = KeyName(wParam, buffer);
+            else if (message == WM_CHAR || message == WM_SYSCHAR) {
+                bool eat = eatCharacter;
+                eatCharacter = false;
+                return eat;
+            }
+            else name = ButtonName(message);
+            bool eaten = name && api::Consumed(name);
+            if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) eatCharacter = eaten;
+            return eaten;
+        }
+
+        bool Releases(LPARAM lParam) {
+            RAWINPUT input{};
+            UINT size = sizeof(input);
+            if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lParam), RID_INPUT, &input, &size, sizeof(RAWINPUTHEADER)) == (UINT)-1) return true;
+            if (input.header.dwType == RIM_TYPEKEYBOARD) return (input.data.keyboard.Flags & RI_KEY_BREAK) != 0;
+            if (input.header.dwType != RIM_TYPEMOUSE) return true;
+            const USHORT ups = RI_MOUSE_LEFT_BUTTON_UP | RI_MOUSE_RIGHT_BUTTON_UP | RI_MOUSE_MIDDLE_BUTTON_UP | RI_MOUSE_BUTTON_4_UP | RI_MOUSE_BUTTON_5_UP;
+            return (input.data.mouse.usButtonFlags & ups) != 0;
+        }
+
+        bool Withheld(UINT message, WPARAM wParam, LPARAM lParam) {
+            switch (message) {
+                case WM_SYSKEYDOWN: return wParam != VK_F4;
+                case WM_KEYDOWN: case WM_CHAR: case WM_SYSCHAR: case WM_DEADCHAR: case WM_SYSDEADCHAR: case WM_UNICHAR:
+                case WM_MOUSEMOVE: case WM_MOUSEWHEEL: case WM_MOUSEHWHEEL:
+                case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK:
+                case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK: case WM_XBUTTONDOWN: case WM_XBUTTONDBLCLK:
+                    return true;
+                case WM_INPUT: return !Releases(lParam);
+                default: return false;
             }
         }
 
@@ -200,12 +255,20 @@ namespace render {
                     bool keyboard = message >= WM_KEYFIRST && message <= WM_KEYLAST;
                     if ((mouse && io.WantCaptureMouse) || (keyboard && typing)) return 0;
                 }
+                if (Eaten(message, wParam, lParam)) return 0;
+                if (api::Blocking() && Withheld(message, wParam, lParam))
+                    return message == WM_INPUT ? DefWindowProcW(hwnd, message, wParam, lParam) : 0;
             }
             return CallWindowProcW(previous, hwnd, message, wParam, lParam);
         }
 
         bool Compile(const char* source, const char* profile, ID3DBlob** blob) {
             return SUCCEEDED(D3DCompile(source, std::strlen(source), nullptr, nullptr, nullptr, "main", profile, 0, 0, blob, nullptr));
+        }
+
+        HRESULT CreatePoint(D3D11_SAMPLER_DESC sampler) {
+            sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+            return gpu.device->CreateSamplerState(&sampler, &gpu.point);
         }
 
         bool CreateObjects() {
@@ -276,7 +339,8 @@ namespace render {
                 && SUCCEEDED(gpu.device->CreateBlendState(&blend, &gpu.blend))
                 && SUCCEEDED(gpu.device->CreateRasterizerState(&raster, &gpu.raster))
                 && SUCCEEDED(gpu.device->CreateDepthStencilState(&depth, &gpu.depth))
-                && SUCCEEDED(gpu.device->CreateSamplerState(&sampler, &gpu.sampler));
+                && SUCCEEDED(gpu.device->CreateSamplerState(&sampler, &gpu.sampler))
+                && SUCCEEDED(CreatePoint(sampler));
         }
 
         DXGI_FORMAT ViewFormat(DXGI_FORMAT format) {
@@ -447,6 +511,7 @@ namespace render {
                 D3D11_RECT rect = {x1, y1, x2, y2};
                 context->RSSetScissorRects(1, &rect);
                 context->PSSetShaderResources(0, 1, &texture->second.view);
+                context->PSSetSamplers(0, 1, command.nearest ? &gpu.point : &gpu.sampler);
                 context->DrawIndexed(command.count, command.first, command.base);
             }
             Restore(context, saved);

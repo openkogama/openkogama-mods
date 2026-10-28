@@ -115,7 +115,6 @@ $checks = [ordered]@{
   "the server offered the hud script" = "scripts from http://127\.0\.0\.1:8080: hud"
   "the hud script started" = "\[server:hud\] started"
   "scripts reached the game's drawing" = "scripts draw into the game"
-  "the world event came once" = "(?s)^(?!.*world loaded.*world loaded).*\[server:hud\] world loaded"
   "the button took two clicks" = "\[server:hud\] clicked 2"
   "keys reached the script" = "\[server:hud\] pressed F7"
   "a change on the server reached the game" = "\[server:hud\] server update arrived"
@@ -124,6 +123,8 @@ $checks = [ordered]@{
   "the script asked the server and got an answer" = "\[server:online\] pong after"
 }
 $missing = @()
+$worlds = [regex]::Matches($text, "\[server:hud\] world loaded").Count
+$checks["the world event came once for each start"] = if ($worlds -ge 1 -and $worlds -le [regex]::Matches($text, "\[server:hud\] started").Count) { "." } else { "(?!)" }
 $lines = @("| session | fps |", "|---|---|")
 foreach ($row in $results) { $lines += "| $($row.session) | $($row.fps) |" }
 $lines += ""

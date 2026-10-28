@@ -65,6 +65,7 @@ namespace runtime {
         Logger logger = nullptr;
         std::vector<Source> sources;
         std::vector<std::unique_ptr<Script>> scripts;
+        std::vector<std::string> kept;
 
         Script* Of(lua_State* L) {
             void* script = nullptr;
@@ -488,6 +489,7 @@ namespace runtime {
                 return;
             }
             Log("[" + script.name + "] started");
+            for (const std::string& event : kept) Dispatch(script, event.c_str(), {});
         }
 
         fs::file_time_type Stamp(const fs::path& path) {
@@ -596,6 +598,10 @@ namespace runtime {
     void Emit(const char* event, const std::vector<Arg>& args) {
         for (auto& script : scripts) Dispatch(*script, event, args);
         Sweep();
+    }
+
+    void Keep(const char* event) {
+        if (std::find(kept.begin(), kept.end(), event) == kept.end()) kept.emplace_back(event);
     }
 
     int Count() {

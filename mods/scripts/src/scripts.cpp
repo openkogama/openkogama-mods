@@ -59,6 +59,7 @@ namespace {
             loading = false;
             remote::Refresh();
             runtime::Emit("world");
+            runtime::Keep("world");
         }
         for (const remote::Message& message : remote::Take())
             runtime::Emit("message", {runtime::Arg::Of(message.name), runtime::Arg::Of(message.data)});

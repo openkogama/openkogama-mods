@@ -27,5 +27,6 @@ namespace menu {
     extern bool captionDrag;
     extern bool welcomeOpen;
     extern void Init();
+    void ShowPanel(const char* window);
     void SendCommand(const char* cmd);
 }

@@ -4,6 +4,7 @@
 #include "Explorer.h"
 #include "GameInfo.h"
 #include "IconsFontAwesome6.h"
+#include "ui.h"
 #include "imnodes/imnodes.h"
 #include "json.hpp"
 #include <vector>
@@ -1665,17 +1666,6 @@ namespace Blueprints {
     }
 
     static void RenderCustomEditor() {
-        ImGui::Text(TR(u8"Custom Node Editor"));
-        ImGui::SameLine(0, 20);
-        ImGui::SetNextItemWidth(200.0f);
-        ImGui::InputTextWithHint(u8"##customName", TR(u8"Node name..."), customName, sizeof(customName));
-
-        ImGui::SameLine(0, 10);
-        ImGui::ColorEdit3(u8"##nodeColor", &customColor.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
-        if (ImGui::IsItemHovered()) { ImGui::BeginTooltip(); ImGui::TextUnformatted(TR(u8"Node color")); ImGui::EndTooltip(); }
-
-        ImGui::SameLine(0, 10);
-        // Check name uniqueness (allow same name if editing same def)
         bool canSave = customName[0] != '\0';
         bool nameTaken = false;
         if (canSave) {
@@ -1684,8 +1674,18 @@ namespace Blueprints {
                 if (customDefs[i].name == customName) { nameTaken = true; break; }
             }
         }
-        if (!canSave || nameTaken) ImGui::BeginDisabled();
-        if (ImGui::Button(TR(u8"Save"))) {
+        if (ui::IconButton(u8"back", ICON_FA_ARROW_LEFT, TR(u8"Back without saving"))) editingCustom = false;
+        ImGui::SameLine();
+        if (ui::IconButton(u8"reset", ICON_FA_ROTATE_LEFT, TR(u8"Reset simulation"))) ResetSimulation(customNodes);
+        ImGui::SameLine();
+        ImGui::ColorEdit3(u8"##nodeColor", &customColor.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+        ImGui::SetItemTooltip(u8"%s", TR(u8"Node color"));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-(ImGui::CalcTextSize(TR(u8"Save")).x + ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetStyle().ItemSpacing.x));
+        ImGui::InputTextWithHint(u8"##customName", TR(u8"Node name"), customName, sizeof(customName));
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!canSave || nameTaken);
+        if (ui::Button(TR(u8"Save"), ui::Tone::Primary)) {
             if (editingDefIndex >= 0) {
                 // Rename all references if name changed
                 std::string oldName = customDefs[editingDefIndex].name;
@@ -1739,17 +1739,8 @@ namespace Blueprints {
             MarkDirty();
             SaveConfig();
         }
-        if (!canSave || nameTaken) ImGui::EndDisabled();
-        if (nameTaken) {
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), TR(u8"Name already in use"));
-        }
-
-        ImGui::SameLine(0, 10);
-        if (ImGui::Button(TR(u8"Cancel")))
-            editingCustom = false;
-
-        ImGui::Separator();
+        ImGui::EndDisabled();
+        if (nameTaken) ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), u8"%s", TR(u8"Name already in use"));
 
         ImVec2 avail = ImGui::GetContentRegionAvail();
 
@@ -1782,13 +1773,6 @@ namespace Blueprints {
 
         ImNodes::EditorContextSet(customEditorCtx);
         ImNodes::BeginNodeEditor();
-
-        // Reset simulation button inside the node editor
-        {
-            ImGui::SetCursorScreenPos(ImVec2(canvasPos.x + 8, canvasPos.y + 8));
-            if (ImGui::SmallButton(TR(u8"Reset simulation")))
-                ResetSimulation(customNodes);
-        }
 
         if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
             ImGui::OpenPopup(u8"##CustomCtxMenu");
@@ -1897,8 +1881,42 @@ namespace Blueprints {
     // -------------------------------------------------------
     // Main editor
     // -------------------------------------------------------
+    static void CircuitToolbar() {
+        if (ui::IconButton(u8"node", ICON_FA_PUZZLE_PIECE, TR(u8"Create node"))) EnterCustomEditor(-1);
+        ImGui::SameLine();
+        if (ui::IconButton(u8"category", ICON_FA_FOLDER_PLUS, TR(u8"Add category"))) {
+            paletteCategories.push_back({"New", {}});
+            MarkDirty();
+            SaveConfig();
+        }
+        ImGui::SameLine();
+        if (ui::IconButton(u8"reset", ICON_FA_ROTATE_LEFT, TR(u8"Reset simulation"))) ResetSimulation(nodes);
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        const Explorer::ObjectEntry* entry = Explorer::FindById(activeCircuitId);
+        LogicCircuit* lc = FindCircuit(activeCircuitId);
+        std::string name = entry && !entry->name.empty() ? entry->name : lc ? lc->name : activeCircuitId;
+        ImGui::TextDisabled(u8"%s  ·  %d %s  ·  %d %s", name.c_str(), (int)nodes.size(), TR(u8"nodes"), (int)links.size(), TR(u8"links"));
+    }
+
+    static void SyncCircuit() {
+        const std::set<std::string>& ids = Explorer::GetSelectedIds();
+        std::string id = ids.size() == 1 && logicCircuitGroupIds.count(*ids.begin()) ? *ids.begin() : std::string();
+        if (id != activeCircuitId) LoadCircuit(id);
+    }
+
     static void RenderMainEditor() {
+        SyncCircuit();
+        if (activeCircuitId.empty()) {
+            ImGui::BeginDisabled(Explorer::RootGroupId() < 0);
+            if (ui::EmptyState(TR(u8"Select a logic circuit in the hierarchy to edit it."), TR(u8"New Logic Circuit")))
+                CreateLogicCircuit(Explorer::RootGroupId());
+            ImGui::EndDisabled();
+            AutoSave();
+            return;
+        }
         InitPalette();
+        CircuitToolbar();
         ImVec2 avail = ImGui::GetContentRegionAvail();
         float maxPaletteW = avail.x * 0.5f;
         if (sPaletteWidth < 100.0f) sPaletteWidth = 100.0f;
@@ -2103,120 +2121,76 @@ namespace Blueprints {
         }
 
         end_palette:
-        ImGui::Spacing();
-        if (ImGui::SmallButton(TR(u8"+ Category")))
-            { paletteCategories.push_back({"New", {}}); MarkDirty(); SaveConfig(); }
-        ImGui::Spacing();
-        if (ImGui::Button(TR(u8"+ Create Node"), ImVec2(-1, 0)))
-            EnterCustomEditor(-1);
-
         ImGui::EndChild();
 
         // Resizable splitter
         VerticalSplitter("##paletteSplit", &sPaletteWidth, 100.0f, maxPaletteW, avail.y);
-
-        // Check if Explorer has a logic circuit selected
-        {
-            const auto& selIds = Explorer::GetSelectedIds();
-            std::string newCircuitId;
-            if (selIds.size() == 1) {
-                const std::string& selId = *selIds.begin();
-                if (logicCircuitGroupIds.count(selId))
-                    newCircuitId = selId;
-            }
-            if (newCircuitId != activeCircuitId)
-                LoadCircuit(newCircuitId);
-        }
 
         // Canvas
         ImVec2 canvasPos = ImGui::GetCursorScreenPos();
         ImGui::BeginChild(u8"##mainCanvas", ImVec2(0, avail.y));
         ImVec2 canvasSize = ImGui::GetContentRegionAvail();
 
-        if (activeCircuitId.empty()) {
-            // No circuit selected -show placeholder
-            ImVec2 center = ImVec2(canvasPos.x + canvasSize.x * 0.5f, canvasPos.y + canvasSize.y * 0.5f);
-            const char* msg = TR(u8"Select a Logic Circuit in Explorer to edit");
-            ImVec2 textSize = ImGui::CalcTextSize(msg);
-            ImGui::SetCursorScreenPos(ImVec2(center.x - textSize.x * 0.5f, center.y - textSize.y * 0.5f));
-            ImGui::TextDisabled("%s", msg);
-        } else {
-            // Active circuit -show circuit name header
-            LogicCircuit* lc = FindCircuit(activeCircuitId);
-            if (lc) {
-                ImGui::Text(ICON_FA_NETWORK_WIRED u8" %s  |  %s: %d  |  %s: %d",
-                    lc->name.c_str(), TR(u8"Nodes"), (int)nodes.size(), TR(u8"Links"), (int)links.size());
+        ImNodes::EditorContextSet(editorCtx);
+        ImNodes::BeginNodeEditor();
+
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+            ImGui::OpenPopup(u8"##BlueprintContextMenu");
+        if (ImGui::BeginPopup(u8"##BlueprintContextMenu")) {
+            ImVec2 mp = ImGui::GetMousePosOnOpeningCurrentPopup();
+            bool hasSelNodes = ImNodes::NumSelectedNodes() > 0;
+            bool hasSelLinks = ImNodes::NumSelectedLinks() > 0;
+            bool hasSel = hasSelNodes || hasSelLinks;
+            bool hasClip = !sClipboardNodes.empty();
+
+            if (ImGui::MenuItem(TR(u8"Copy"), "Ctrl+C", false, hasSelNodes))
+                CopySelected(nodes, links);
+            if (ImGui::MenuItem(TR(u8"Paste"), "Ctrl+V", false, hasClip))
+                PasteClipboard(nodes, links, &AllocId, mp);
+            if (ImGui::MenuItem(TR(u8"Duplicate"), "Ctrl+D", false, hasSelNodes))
+                DuplicateSelected(nodes, links, &AllocId);
+            if (ImGui::MenuItem(TR(u8"Remove"), "Del", false, hasSel))
+                DeleteSelected(nodes, links, false);
+
+            ImGui::Separator();
+
+            if (ImGui::BeginMenu(TR(u8"Advanced Logic"))) {
+                if (ImGui::MenuItem(u8"CUBE MODEL TRANSPARENCY")) nodes.push_back(CreateBuiltinNode(NodeType::CubeModelTransparency, mp, &AllocId));
+                if (ImGui::MenuItem(u8"LEVER"))                   nodes.push_back(CreateBuiltinNode(NodeType::Button,                mp, &AllocId));
+                if (ImGui::MenuItem(u8"TRIGGER CUBE"))            nodes.push_back(CreateBuiltinNode(NodeType::TriggerCube,           mp, &AllocId));
+                if (ImGui::MenuItem(u8"PULSE CUBE"))              nodes.push_back(CreateBuiltinNode(NodeType::PulseCube,             mp, &AllocId));
+                if (ImGui::MenuItem(u8"PRESSURE PLATE"))          nodes.push_back(CreateBuiltinNode(NodeType::PressurePlate,         mp, &AllocId));
+                if (ImGui::MenuItem(u8"TARGET CUBE"))             nodes.push_back(CreateBuiltinNode(NodeType::TargetCube,            mp, &AllocId));
+                if (ImGui::MenuItem(u8"COUNTING CUBE"))           nodes.push_back(CreateBuiltinNode(NodeType::CountingCube,          mp, &AllocId));
+                if (ImGui::MenuItem(u8"RANDOM CUBE"))             nodes.push_back(CreateBuiltinNode(NodeType::RandomCube,            mp, &AllocId));
+                if (ImGui::MenuItem(u8"CUBE MODEL HIDER"))        nodes.push_back(CreateBuiltinNode(NodeType::CubeModelHider,        mp, &AllocId));
+                if (ImGui::MenuItem(u8"AND CUBE"))                nodes.push_back(CreateBuiltinNode(NodeType::LogicAND,              mp, &AllocId));
+                if (ImGui::MenuItem(u8"NEGATE CUBE"))             nodes.push_back(CreateBuiltinNode(NodeType::LogicNOT,              mp, &AllocId));
+                if (ImGui::MenuItem(u8"DELAY CUBE"))              nodes.push_back(CreateBuiltinNode(NodeType::DelayCube,             mp, &AllocId));
+                if (ImGui::MenuItem(u8"TOGGLE CUBE"))             nodes.push_back(CreateBuiltinNode(NodeType::LogicTOGGLE,           mp, &AllocId));
+                ImGui::EndMenu();
             }
-
-            ImNodes::EditorContextSet(editorCtx);
-            ImNodes::BeginNodeEditor();
-
-            // Reset simulation button inside the node editor
-            {
-                ImVec2 editorPos = ImGui::GetCursorScreenPos();
-                ImGui::SetCursorScreenPos(ImVec2(canvasPos.x + 8, canvasPos.y + (lc ? 24.0f : 8.0f)));
-                if (ImGui::SmallButton(TR(u8"Reset simulation")))
-                    ResetSimulation(nodes);
+            if (!customDefs.empty() && ImGui::BeginMenu(TR(u8"Custom"))) {
+                for (int i = 0; i < (int)customDefs.size(); i++)
+                    if (ImGui::MenuItem(customDefs[i].name.c_str()))
+                        nodes.push_back(CreateCustomNode(i, mp));
+                ImGui::EndMenu();
             }
-
-            if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
-                ImGui::OpenPopup(u8"##BlueprintContextMenu");
-            if (ImGui::BeginPopup(u8"##BlueprintContextMenu")) {
-                ImVec2 mp = ImGui::GetMousePosOnOpeningCurrentPopup();
-                bool hasSelNodes = ImNodes::NumSelectedNodes() > 0;
-                bool hasSelLinks = ImNodes::NumSelectedLinks() > 0;
-                bool hasSel = hasSelNodes || hasSelLinks;
-                bool hasClip = !sClipboardNodes.empty();
-
-                if (ImGui::MenuItem(TR(u8"Copy"), "Ctrl+C", false, hasSelNodes))
-                    CopySelected(nodes, links);
-                if (ImGui::MenuItem(TR(u8"Paste"), "Ctrl+V", false, hasClip))
-                    PasteClipboard(nodes, links, &AllocId, mp);
-                if (ImGui::MenuItem(TR(u8"Duplicate"), "Ctrl+D", false, hasSelNodes))
-                    DuplicateSelected(nodes, links, &AllocId);
-                if (ImGui::MenuItem(TR(u8"Remove"), "Del", false, hasSel))
-                    DeleteSelected(nodes, links, false);
-
-                ImGui::Separator();
-
-                if (ImGui::BeginMenu(TR(u8"Advanced Logic"))) {
-                    if (ImGui::MenuItem(u8"CUBE MODEL TRANSPARENCY")) nodes.push_back(CreateBuiltinNode(NodeType::CubeModelTransparency, mp, &AllocId));
-                    if (ImGui::MenuItem(u8"LEVER"))                   nodes.push_back(CreateBuiltinNode(NodeType::Button,                mp, &AllocId));
-                    if (ImGui::MenuItem(u8"TRIGGER CUBE"))            nodes.push_back(CreateBuiltinNode(NodeType::TriggerCube,           mp, &AllocId));
-                    if (ImGui::MenuItem(u8"PULSE CUBE"))              nodes.push_back(CreateBuiltinNode(NodeType::PulseCube,             mp, &AllocId));
-                    if (ImGui::MenuItem(u8"PRESSURE PLATE"))          nodes.push_back(CreateBuiltinNode(NodeType::PressurePlate,         mp, &AllocId));
-                    if (ImGui::MenuItem(u8"TARGET CUBE"))             nodes.push_back(CreateBuiltinNode(NodeType::TargetCube,            mp, &AllocId));
-                    if (ImGui::MenuItem(u8"COUNTING CUBE"))           nodes.push_back(CreateBuiltinNode(NodeType::CountingCube,          mp, &AllocId));
-                    if (ImGui::MenuItem(u8"RANDOM CUBE"))             nodes.push_back(CreateBuiltinNode(NodeType::RandomCube,            mp, &AllocId));
-                    if (ImGui::MenuItem(u8"CUBE MODEL HIDER"))        nodes.push_back(CreateBuiltinNode(NodeType::CubeModelHider,        mp, &AllocId));
-                    if (ImGui::MenuItem(u8"AND CUBE"))                nodes.push_back(CreateBuiltinNode(NodeType::LogicAND,              mp, &AllocId));
-                    if (ImGui::MenuItem(u8"NEGATE CUBE"))             nodes.push_back(CreateBuiltinNode(NodeType::LogicNOT,              mp, &AllocId));
-                    if (ImGui::MenuItem(u8"DELAY CUBE"))              nodes.push_back(CreateBuiltinNode(NodeType::DelayCube,             mp, &AllocId));
-                    if (ImGui::MenuItem(u8"TOGGLE CUBE"))             nodes.push_back(CreateBuiltinNode(NodeType::LogicTOGGLE,           mp, &AllocId));
-                    ImGui::EndMenu();
-                }
-                if (!customDefs.empty() && ImGui::BeginMenu(TR(u8"Custom"))) {
-                    for (int i = 0; i < (int)customDefs.size(); i++)
-                        if (ImGui::MenuItem(customDefs[i].name.c_str()))
-                            nodes.push_back(CreateCustomNode(i, mp));
-                    ImGui::EndMenu();
-                }
-                ImGui::EndPopup();
-            }
-
-            SimulateBlueprintStep(nodes, links);
-            RenderNodes(nodes, links);
-            ImNodes::MiniMap(0.15f, ImNodesMiniMapLocation_BottomRight);
-            ImNodes::EndNodeEditor();
-
-            HandleLinks(links, &AllocId, &nodes);
-            HandleDeletion(nodes, links, false);
-            HandleClipboardShortcuts(nodes, links, &AllocId, false);
-            HandleDrop(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y),
-                       nodes, &AllocId, true);
-
-            MarkDirty();
+            ImGui::EndPopup();
         }
+
+        SimulateBlueprintStep(nodes, links);
+        RenderNodes(nodes, links);
+        ImNodes::MiniMap(0.15f, ImNodesMiniMapLocation_BottomRight);
+        ImNodes::EndNodeEditor();
+
+        HandleLinks(links, &AllocId, &nodes);
+        HandleDeletion(nodes, links, false);
+        HandleClipboardShortcuts(nodes, links, &AllocId, false);
+        HandleDrop(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y),
+                   nodes, &AllocId, true);
+
+        MarkDirty();
 
         ImGui::EndChild();
         AutoSave();
@@ -2226,42 +2200,39 @@ namespace Blueprints {
     // Public API
     // -------------------------------------------------------
     static int sLogicCircuitCounter = 0;
-    static bool sPendingLogicCircuit = false; // set after creating, resolved on next explorer refresh
+    static bool sPendingLogicCircuit = false;
+    static int sFocusPanel = 0;
+    static std::set<std::string> sGroupsBefore;
+
+    static std::set<std::string> Groups() {
+        std::set<std::string> ids;
+        for (const Explorer::ObjectEntry& entry : Explorer::GetAllObjects())
+            if (entry.type.find("Group") != std::string::npos) ids.insert(entry.id);
+        return ids;
+    }
 
     void CreateLogicCircuit(int parentGroupId) {
         sLogicCircuitCounter++;
         char cmd[512];
         snprintf(cmd, sizeof(cmd), "explorer_create_group|%d|0|10|0|0|0|0|1|1|1|0", parentGroupId);
         menu::SendCommand(cmd);
+        sGroupsBefore = Groups();
         sPendingLogicCircuit = true;
-        MarkDirty();
+        menu::ShowPanel(u8"###Blueprints");
     }
 
-    // Called each frame: if we just created a logic circuit group, find the newest group
-    // in Explorer that isn't already a logic circuit and mark it
     static void ResolvePendingLogicCircuit() {
         if (!sPendingLogicCircuit) return;
-        // Look for the highest-ID Group that isn't already a logic circuit
-        std::string bestId;
-        int bestNumId = -1;
-        const auto& selIds = Explorer::GetSelectedIds();
-        // Iterate all objects (not ideal but works)
-        // We look for the selected group - after creation, Explorer auto-selects the new item
-        if (selIds.size() == 1) {
-            const std::string& sid = *selIds.begin();
-            const Explorer::ObjectEntry* obj = Explorer::FindById(sid);
-            if (obj && obj->type.find("Group") != std::string::npos && !IsLogicCircuit(sid)) {
-                SetLogicCircuit(sid, true);
-                // Rename it
-                std::string name = "Logic Circuit " + std::to_string(sLogicCircuitCounter);
-                char cmd[256];
-                snprintf(cmd, sizeof(cmd), "explorer_rename|%s|%s", sid.c_str(), name.c_str());
-                menu::SendCommand(cmd);
-                // Update name in our circuit data
-                LogicCircuit* lc = FindCircuit(sid);
-                if (lc) lc->name = name;
-                sPendingLogicCircuit = false;
-            }
+        for (const std::string& id : Groups()) {
+            if (sGroupsBefore.count(id) || IsLogicCircuit(id)) continue;
+            SetLogicCircuit(id, true);
+            std::string name = "Logic Circuit " + std::to_string(sLogicCircuitCounter);
+            menu::SendCommand(("explorer_rename|" + id + "|" + name).c_str());
+            if (LogicCircuit* lc = FindCircuit(id)) lc->name = name;
+            Explorer::Select(id);
+            sFocusPanel = 3;
+            sPendingLogicCircuit = false;
+            return;
         }
     }
 
@@ -2290,31 +2261,26 @@ namespace Blueprints {
         SaveConfig();
     }
 
-    // Called from Render each frame to check for newly created groups that should become logic circuits
-    static void CheckPendingLogicCircuits() {
-        // Simple heuristic: if a group named "Group" was just created and isn't a logic circuit yet,
-        // and we recently asked to create one, register it.
-        // Better approach: we track recently created group IDs after sending the command.
-        // For now we provide a UI way: user can mark any group as logic circuit from the Blueprints panel.
-    }
-
     // -------------------------------------------------------
     // Main Render
     // -------------------------------------------------------
     bool g_wantBlockViewport = false;
 
     void Render() {
-        if (!ImGui::Begin((std::string(TR(u8"Blueprints")) + u8"###Blueprints").c_str(), nullptr, ImGuiWindowFlags_NoCollapse))
+        ResolvePendingLogicCircuit();
+        if (sFocusPanel > 0) {
+            ImGui::SetNextWindowFocus();
+            sFocusPanel--;
+        }
+        if (!ui::BeginPanel(u8"Blueprints", ICON_FA_NETWORK_WIRED, TR(u8"Logic"), nullptr))
         {
             g_wantBlockViewport = false;
-            ImGui::End();
+            ui::EndPanel();
             return;
         }
 
         g_wantBlockViewport = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
                            || ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
-
-        ResolvePendingLogicCircuit();
 
         static bool imnodesInitialized = false;
         if (!imnodesInitialized) {
@@ -2343,6 +2309,6 @@ namespace Blueprints {
         // Draw drag overlay on top of everything
         DrawDragOverlay();
 
-        ImGui::End();
+        ui::EndPanel();
     }
 }

@@ -6,30 +6,17 @@
 #include "okmod.h"
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstring>
 #include <string>
 
 namespace {
     constexpr int KeyF2 = 283;
-    constexpr int KeyA = 97;
-    constexpr int KeyD = 100;
-    constexpr int KeyE = 101;
-    constexpr int KeyQ = 113;
-    constexpr int KeyS = 115;
-    constexpr int KeyW = 119;
-    constexpr int KeyLeftShift = 304;
-    constexpr int RightMouse = 1;
     constexpr double ReportSeconds = 0.5;
-    constexpr double Degrees = 57.29577951308232;
-    constexpr double MaxPitch = 89.0;
-    constexpr double SprintFactor = 3.0;
 
     constexpr int ScaleArgument = 6;
     constexpr int DeltaArgument = 1;
     constexpr int GridSizeArgument = 6;
     constexpr int RotationSpeedArgument = 6;
-    constexpr int CameraTypeArgument = 1;
     constexpr int BlueModeArgument = 1;
     constexpr int FloatValueArgument = 6;
     constexpr int FloatMinArgument = 7;
@@ -41,13 +28,7 @@ namespace {
 
     const OkMod* api = nullptr;
     bool announced = false;
-    bool antiAfk = false;
     bool blueMode = false;
-    int64_t forcedCamera = -1;
-    double fov = -1.0;
-    double zoom = 1.0;
-    double baseFov = -1.0;
-    double distance = -1.0;
     int frames = 0;
     std::chrono::steady_clock::time_point reportedAt = std::chrono::steady_clock::now();
 
@@ -65,17 +46,6 @@ namespace {
         double configMin = 0.0;
         double configMax = 1.0;
     } options;
-
-    struct Freecam {
-        bool enabled = false;
-        bool ready = false;
-        bool rightClick = true;
-        double speed = 20.0;
-        double sensitivity = 2.0;
-        double yaw = 0.0;
-        double pitch = 0.0;
-        ok_vec3 position{0, 0, 0};
-    } freecam;
 
     struct Vec3 { float x, y, z; };
 
@@ -114,59 +84,10 @@ namespace {
     }
 
     void StartOverlay() {
-        if (overlay::Running()) return;
+        if (overlay::Running() || overlay::Failed()) return;
         HWND game = nullptr;
         EnumWindows(Pick, (LPARAM)&game);
         if (game) overlay::Start(game);
-    }
-
-    ok_object CameraManager() { return api->call_static_obj("MVGameControllerBase", "get_MainCameraManager"); }
-
-    bool Key(int code) {
-        int64_t arg = code;
-        return api->invoke(0, "UnityEngine.Input", "GetKey", 1, &arg, "i", 'i') & 0xFF;
-    }
-
-    double Axis(const char* name) {
-        int64_t arg = Pointer(name);
-        return FromBits(api->invoke(0, "UnityEngine.Input", "GetAxis", 1, &arg, "s", 'i'));
-    }
-
-    ok_vec3 Rotate(const ok_quat& q, const ok_vec3& v) {
-        ok_vec3 t{2 * (q.y * v.z - q.z * v.y), 2 * (q.z * v.x - q.x * v.z), 2 * (q.x * v.y - q.y * v.x)};
-        return {v.x + q.w * t.x + (q.y * t.z - q.z * t.y), v.y + q.w * t.y + (q.z * t.x - q.x * t.z), v.z + q.w * t.z + (q.x * t.y - q.y * t.x)};
-    }
-
-    void ApplyCamera() {
-        ok_object manager = CameraManager();
-        if (!manager) return;
-        if (fov > 0 || zoom != 1.0) {
-            if (baseFov <= 0) baseFov = FromBits(api->invoke(manager, "MainCameraManager", "get_FieldOfView", 0, nullptr, "", 'i'));
-            double wanted = (fov > 0 ? fov : baseFov) / (zoom > 0.01 ? zoom : 1.0);
-            int64_t arg = FloatBits(wanted);
-            api->invoke(manager, "MainCameraManager", "set_FieldOfView", 1, &arg, "f", 'v');
-        }
-        if (distance > 0) {
-            ok_object camera = Get(manager, "MainCameraManager", "get_CurrentCamera");
-            if (camera) api->set_field_num(camera, "PlaymodeCamera", "distanceToAvatar", distance);
-        }
-    }
-
-    void ResetFov() {
-        ok_object manager = CameraManager();
-        if (manager && baseFov > 0 && fov <= 0 && zoom == 1.0) {
-            int64_t arg = FloatBits(baseFov);
-            api->invoke(manager, "MainCameraManager", "set_FieldOfView", 1, &arg, "f", 'v');
-            baseFov = -1.0;
-        }
-    }
-
-    void SetCameraMode(int64_t mode) {
-        ok_object manager = CameraManager();
-        ok_object controller = manager ? api->field_obj(manager, "MainCameraManager", "cameraController") : 0;
-        if (!controller) return;
-        forcedCamera = mode;
-        api->invoke(controller, "MVCameraController", "SetCamera", 1, &mode, "i", 'v');
     }
 
     void Handle(const std::string& line) {
@@ -178,11 +99,6 @@ namespace {
         if (command == "option_no_build_limit") api->flag_set("no_build_limit", On(value));
         else if (command == "option_single_side_painting") options.singleSidePainting = On(value);
         else if (command == "option_destructibles_unlock") api->flag_set("destructibles_unlock", On(value));
-        else if (command == "option_anti_afk") {
-            antiAfk = On(value);
-            int64_t kick = !antiAfk;
-            api->invoke(0, "AwayMonitor", "set_IdleKickEnabled", 1, &kick, "i", 'v');
-        }
         else if (command == "option_blue_mode") blueMode = On(value);
         else if (command == "option_custom_grid_size_enabled") options.customGrid = On(value);
         else if (command == "option_custom_grid_size") options.gridSize = number;
@@ -196,19 +112,6 @@ namespace {
         else if (command == "option_custom_model_scale_enabled") options.modelScale = On(value);
         else if (command == "option_custom_model_scale_value") options.modelScaleValue = number;
         else if (command == "option_unlimited_muzzle_position") api->flag_set("unlimited_muzzle_position", On(value));
-        else if (command == "camera_fov") fov = number;
-        else if (command == "camera_fov_reset") { fov = -1.0; ResetFov(); }
-        else if (command == "camera_zoom") zoom = number;
-        else if (command == "camera_zoom_reset") { zoom = 1.0; ResetFov(); }
-        else if (command == "camera_distance") distance = number;
-        else if (command == "camera_distance_reset") distance = -1.0;
-        else if (command == "camera_freecam_enable") { freecam.enabled = true; freecam.ready = false; }
-        else if (command == "camera_freecam_disable") { freecam.enabled = false; freecam.ready = false; }
-        else if (command == "camera_freecam_speed") freecam.speed = number;
-        else if (command == "camera_freecam_sensitivity") freecam.sensitivity = number;
-        else if (command == "camera_freecam_require_rmb") freecam.rightClick = On(value);
-        else if (command == "camera_set_mode") SetCameraMode(std::atoi(value.c_str()));
-        else if (command == "camera_mode_reset") forcedCamera = -1;
         else if (!world::Handle(command, value) && !cubes::Handle(command, value)) DebugLog("[backend] not handled yet: %s\n", line.c_str());
     }
 
@@ -239,59 +142,9 @@ namespace {
 
         std::string command;
         while (bridge::NextForGame(command)) Handle(command);
-        if (antiAfk) {
-            int64_t off = 0;
-            api->invoke(0, "AwayMonitor", "set_IdleKickEnabled", 1, &off, "i", 'v');
-        }
-        ApplyCamera();
         world::Tick();
         cubes::Tick();
         Report();
-    }
-
-    void OnLateFrame(ok_call*, void*) {
-        if (!freecam.enabled) return;
-        ok_object transform = Get(CameraManager(), "MainCameraManager", "get_ProtectedTransform");
-        if (!transform) return;
-        if (!freecam.ready) {
-            ok_quat rotation{0, 0, 0, 1};
-            api->unbox(Get(transform, "ProtectedTransform", "get_position"), &freecam.position, sizeof(freecam.position));
-            api->unbox(Get(transform, "ProtectedTransform", "get_rotation"), &rotation, sizeof(rotation));
-            ok_vec3 forward = Rotate(rotation, {0, 0, 1});
-            freecam.yaw = std::atan2(forward.x, forward.z) * Degrees;
-            freecam.pitch = -std::asin(std::clamp((double)forward.y, -1.0, 1.0)) * Degrees;
-            freecam.ready = true;
-            return;
-        }
-
-        int64_t button = RightMouse;
-        if (!freecam.rightClick || (api->invoke(0, "UnityEngine.Input", "GetMouseButton", 1, &button, "i", 'i') & 0xFF)) {
-            freecam.yaw += Axis("Mouse X") * freecam.sensitivity;
-            freecam.pitch = std::clamp(freecam.pitch - Axis("Mouse Y") * freecam.sensitivity, -MaxPitch, MaxPitch);
-        }
-        double yaw = freecam.yaw / Degrees, pitch = freecam.pitch / Degrees;
-        ok_vec3 forward{(float)(std::sin(yaw) * std::cos(pitch)), (float)-std::sin(pitch), (float)(std::cos(yaw) * std::cos(pitch))};
-        ok_vec3 right{(float)std::cos(yaw), 0, (float)-std::sin(yaw)};
-        double dx = 0, dy = 0, dz = 0;
-        if (Key(KeyW)) { dx += forward.x; dy += forward.y; dz += forward.z; }
-        if (Key(KeyS)) { dx -= forward.x; dy -= forward.y; dz -= forward.z; }
-        if (Key(KeyD)) { dx += right.x; dz += right.z; }
-        if (Key(KeyA)) { dx -= right.x; dz -= right.z; }
-        if (Key(KeyE)) dy += 1;
-        if (Key(KeyQ)) dy -= 1;
-        double length = std::sqrt(dx * dx + dy * dy + dz * dz);
-        if (length > 0) {
-            double delta = FromBits(api->invoke(0, "UnityEngine.Time", "get_deltaTime", 0, nullptr, "", 'i'));
-            double step = freecam.speed * delta * (Key(KeyLeftShift) ? SprintFactor : 1.0) / length;
-            freecam.position.x += (float)(dx * step);
-            freecam.position.y += (float)(dy * step);
-            freecam.position.z += (float)(dz * step);
-        }
-        double sx = std::sin(pitch / 2), cx = std::cos(pitch / 2), sy = std::sin(yaw / 2), cy = std::cos(yaw / 2);
-        ok_quat rotation{(float)(cy * sx), (float)(sy * cx), (float)(-sy * sx), (float)(cy * cx)};
-        int64_t position = Pointer(&freecam.position), turn = Pointer(&rotation);
-        api->invoke(transform, "ProtectedTransform", "set_position", 1, &position, "p", 'v');
-        api->invoke(transform, "ProtectedTransform", "set_rotation", 1, &turn, "p", 'v');
     }
 
     void OnQuit(ok_call*, void*) { overlay::Release(); }
@@ -341,10 +194,6 @@ namespace {
         double speed = FromBits(api->arg_int(call, RotationSpeedArgument));
         double step = options.rotationStepSize;
         api->set_arg_int(call, RotationSpeedArgument, FloatBits(speed > 0 ? step : speed < 0 ? -step : 0.0));
-    }
-
-    void OnSetCamera(ok_call* call, void*) {
-        if (forcedCamera >= 0) api->set_arg_int(call, CameraTypeArgument, forcedCamera);
     }
 
     void OnBlueMode(ok_call* call, void*) {
@@ -427,11 +276,11 @@ namespace {
         cubes::Attach(host);
         globals::mainModule = GetModuleHandleW(L"kogamastudio.dll");
         api->on("frame", OnFrame, nullptr);
-        api->on("frame.late", OnLateFrame, nullptr);
         api->on("app.quit", OnQuit, nullptr);
         api->on("editor.select", OnSelect, nullptr);
         api->on("world.object_added", OnWorldChanged, nullptr);
         api->on("world.object_removed", OnWorldChanged, nullptr);
+        api->on("world.object_transferred", OnWorldChanged, nullptr);
         api->on("world.loaded", OnWorldChanged, nullptr);
         api->on("editor.translate_start", OnTranslateStart, nullptr);
         api->on("editor.translate_end", OnTranslateEnd, nullptr);
@@ -447,7 +296,6 @@ namespace {
         api->on("editor.grid_point", OnGridPoint, nullptr);
         api->on("editor.rotate_step", OnRotateStep, nullptr);
         api->on("editor.paint_cubes", OnPaintCubes, nullptr);
-        api->on("camera.set", OnSetCamera, nullptr);
         api->on("camera.blue_mode", OnBlueMode, nullptr);
         api->on("settings.slider_float", OnSliderFloat, nullptr);
         api->on("settings.slider_int", OnSliderInt, nullptr);

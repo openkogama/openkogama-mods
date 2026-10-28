@@ -1,30 +1,24 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include "imgui/imgui_internal.h"
-#include "ResourcePackLoader.h"
 #include "pipe.h"
 #include "MenuHelpers.h"
-#include <chrono>
-#include <thread>
-#include <filesystem>
+#include "IconsFontAwesome6.h"
+#include "ui.h"
 #include "Tools.h"
-#include "ResourcePacks.h"
-#include "About.h"
-#include "Translate.h"
 #include "Properties.h"
 #include "Clipboard.h"
 #include "Appearance.h"
 #include "Console.h"
 #include "Players.h"
-#include "Camera.h"
 #include "Explorer.h"
 #include "GameInfo.h"
 #include "Inventory.h"
 #include "History.h"
-#include "Worlds.h"
 #include "Welcome.h"
 #include "Blueprints.h"
-#include "Performance.h"
 #include "overlay.h"
+#include "version.h"
+#include <algorithm>
 
 namespace menu {
     bool isOpen = false;
@@ -35,99 +29,272 @@ namespace menu {
     ImVec2 viewportImageMax = {};
     float menuBarHeight = 0.0f;
     bool captionDrag = false;
-    float test = 0.0f;
-    static bool noTitleBar = false;
-    static HMODULE hModule = nullptr;
 
-    namespace Windows {
-        static bool settingsOpen = false;
-        static bool consoleOpen = false;
-    }
+    namespace {
+        constexpr const char* DockName = u8"StudioDock";
 
-    enum class Glyph { Minimize, Maximize, Restore, Close };
+        enum class Glyph { Minimize, Maximize, Restore, Close };
 
-    static bool CaptionButton(const char* id, Glyph glyph, float width, float height)
-    {
-        ImVec2 at = ImGui::GetCursorScreenPos();
-        bool pressed = ImGui::InvisibleButton(id, ImVec2(width, height));
-        ImDrawList* draw = ImGui::GetWindowDrawList();
-        if (ImGui::IsItemHovered())
-        {
-            ImU32 fill = glyph == Glyph::Close ? IM_COL32(232, 17, 35, 255) : ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered);
-            draw->AddRectFilled(at, ImVec2(at.x + width, at.y + height), fill);
+        struct Panel {
+            const char* window;
+            const char* title;
+            void (*render)();
+            bool open;
+            bool editOnly;
+        };
+
+        void RenderConsole() { AppLog::Render(); }
+
+        Panel panels[] = {
+            {u8"###Explorer",      u8"Hierarchy",      Explorer::Render,     true,  true},
+            {u8"###Properties",    u8"Inspector",      Properties::Render,   true,  true},
+            {u8"###Tools",         u8"Build",          Tools::Render,        true,  true},
+            {u8"###Inventory",     u8"Assets",         Inventory::Render,    true,  true},
+            {u8"###Clipboard",     u8"Clipboard",      Clipboard::Render,    true,  true},
+            {u8"###History",       u8"History",        History::Render,      true,  true},
+            {u8"###Players",       u8"Players",        Players::Render,      true,  true},
+            {u8"###Blueprints",    u8"Logic",          Blueprints::Render,   true,  true},
+            {u8"###Console",       u8"Console",        RenderConsole,        false, false},
+        };
+
+        bool layoutReset = false;
+        int focusViewport = 3;
+        bool settingsRequested = false;
+        bool aboutRequested = false;
+
+        bool CaptionButton(const char* id, Glyph glyph, float width, float height) {
+            ImVec2 at = ImGui::GetCursorScreenPos();
+            bool pressed = ImGui::InvisibleButton(id, ImVec2(width, height));
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            if (ImGui::IsItemHovered()) {
+                ImU32 fill = glyph == Glyph::Close ? IM_COL32(232, 17, 35, 255) : ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered);
+                draw->AddRectFilled(at, ImVec2(at.x + width, at.y + height), fill);
+            }
+            ImU32 ink = ImGui::GetColorU32(ImGuiCol_Text);
+            float size = (float)(int)(height * 0.22f);
+            float x = (float)(int)(at.x + width * 0.5f) + 0.5f, y = (float)(int)(at.y + height * 0.5f) + 0.5f;
+            switch (glyph) {
+            case Glyph::Minimize:
+                draw->AddLine(ImVec2(x - size, y), ImVec2(x + size + 1, y), ink);
+                break;
+            case Glyph::Maximize:
+                draw->AddRect(ImVec2(x - size, y - size), ImVec2(x + size, y + size), ink);
+                break;
+            case Glyph::Restore:
+                draw->AddRect(ImVec2(x - size + 2, y - size), ImVec2(x + size, y + size - 2), ink);
+                draw->AddRectFilled(ImVec2(x - size, y - size + 2), ImVec2(x + size - 2, y + size), ImGui::GetColorU32(ImGuiCol_MenuBarBg));
+                draw->AddRect(ImVec2(x - size, y - size + 2), ImVec2(x + size - 2, y + size), ink);
+                break;
+            case Glyph::Close:
+                draw->AddLine(ImVec2(x - size, y - size), ImVec2(x + size, y + size), ink);
+                draw->AddLine(ImVec2(x + size, y - size), ImVec2(x - size, y + size), ink);
+                break;
+            }
+            return pressed;
         }
-        ImU32 ink = ImGui::GetColorU32(ImGuiCol_Text);
-        float size = (float)(int)(height * 0.22f);
-        float x = (float)(int)(at.x + width * 0.5f) + 0.5f, y = (float)(int)(at.y + height * 0.5f) + 0.5f;
-        switch (glyph)
-        {
-        case Glyph::Minimize:
-            draw->AddLine(ImVec2(x - size, y), ImVec2(x + size + 1, y), ink);
-            break;
-        case Glyph::Maximize:
-            draw->AddRect(ImVec2(x - size, y - size), ImVec2(x + size, y + size), ink);
-            break;
-        case Glyph::Restore:
-            draw->AddRect(ImVec2(x - size + 2, y - size), ImVec2(x + size, y + size - 2), ink);
-            draw->AddRectFilled(ImVec2(x - size, y - size + 2), ImVec2(x + size - 2, y + size), ImGui::GetColorU32(ImGuiCol_MenuBarBg));
-            draw->AddRect(ImVec2(x - size, y - size + 2), ImVec2(x + size - 2, y + size), ink);
-            break;
-        case Glyph::Close:
-            draw->AddLine(ImVec2(x - size, y - size), ImVec2(x + size, y + size), ink);
-            draw->AddLine(ImVec2(x + size, y - size), ImVec2(x - size, y + size), ink);
-            break;
+
+        void Caption() {
+            float height = ImGui::GetWindowHeight();
+            float button = (float)(int)(height * 1.75f);
+            float width = ImGui::GetWindowDrawList()->GetClipRectMax().x - ImGui::GetWindowPos().x;
+            float buttons = button * 3.0f;
+            const char* title = overlay::Title();
+            ImVec2 text = ImGui::CalcTextSize(title);
+            float x = (width - text.x) * 0.5f;
+            if (*title && x > ImGui::GetCursorPosX() && x + text.x < width - buttons) {
+                ImGui::SetCursorPosX(x);
+                ImGui::TextUnformatted(title);
+            }
+            ImGui::SetCursorPos(ImVec2(width - buttons, 0.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, ImGui::GetStyle().ItemSpacing.y));
+            if (CaptionButton(u8"##minimize", Glyph::Minimize, button, height)) overlay::Minimize();
+            if (CaptionButton(u8"##maximize", overlay::Maximized() ? Glyph::Restore : Glyph::Maximize, button, height)) overlay::ToggleMaximize();
+            if (CaptionButton(u8"##close", Glyph::Close, button, height)) overlay::Close();
+            ImGui::PopStyleVar();
+            captionDrag = ImGui::IsWindowHovered() && !ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive();
         }
-        return pressed;
-    }
 
-    static void Caption()
-    {
-        float height = ImGui::GetWindowHeight();
-        float button = (float)(int)(height * 1.75f);
-        float width = ImGui::GetWindowDrawList()->GetClipRectMax().x - ImGui::GetWindowPos().x;
-        float buttons = button * 3.0f;
-        const char* title = overlay::Title();
-        ImVec2 text = ImGui::CalcTextSize(title);
-        float x = (width - text.x) * 0.5f;
-        if (*title && x > ImGui::GetCursorPosX() && x + text.x < width - buttons)
-        {
-            ImGui::SetCursorPosX(x);
-            ImGui::TextUnformatted(title);
+        bool Editing() { return GameInfo::gameMode != "Play" || Appearance::IsExtendedActive(); }
+
+        void MenuBar() {
+            if (!ImGui::BeginMainMenuBar()) return;
+            menuBarHeight = ImGui::GetWindowSize().y;
+            if (ImGui::BeginMenu(TR(u8"Edit"))) {
+                if (ImGui::MenuItem(TR(u8"Undo"), nullptr, false, History::CanUndo())) History::Undo();
+                if (ImGui::MenuItem(TR(u8"Redo"), nullptr, false, History::CanRedo())) History::Redo();
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu(TR(u8"View"))) {
+                for (Panel& panel : panels)
+                    ImGui::MenuItem(TR(panel.title), nullptr, &panel.open, Editing() || !panel.editOnly);
+                ImGui::Separator();
+                if (ImGui::MenuItem(TR(u8"Reset layout"))) layoutReset = true;
+                ImGui::EndMenu();
+            }
+            if (ImGui::MenuItem(TR(u8"Settings"))) settingsRequested = true;
+            if (ImGui::BeginMenu(TR(u8"Help"))) {
+                if (ImGui::MenuItem(TR(u8"About"))) aboutRequested = true;
+                ImGui::EndMenu();
+            }
+            Caption();
+            ImGui::EndMainMenuBar();
         }
-        ImGui::SetCursorPos(ImVec2(width - buttons, 0.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, ImGui::GetStyle().ItemSpacing.y));
-        if (CaptionButton(u8"##minimize", Glyph::Minimize, button, height)) overlay::Minimize();
-        if (CaptionButton(u8"##maximize", overlay::Maximized() ? Glyph::Restore : Glyph::Maximize, button, height)) overlay::ToggleMaximize();
-        if (CaptionButton(u8"##close", Glyph::Close, button, height)) overlay::Close();
-        ImGui::PopStyleVar();
-        captionDrag = ImGui::IsWindowHovered() && !ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive();
-    }
 
-    void Init() {
-        static float scale = 1.0f;
+        void StatusBar() {
+            ImGuiViewport* viewport = ImGui::GetMainViewport();
+            float height = ImGui::GetFrameHeight();
+            ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar;
+            if (ImGui::BeginViewportSideBar(u8"##status", viewport, ImGuiDir_Down, height, flags)) {
+                if (ImGui::BeginMenuBar()) {
+                    ImGui::TextDisabled(u8"%s", GameInfo::gameMode.empty() ? u8"-" : GameInfo::gameMode.c_str());
+                    if (ImGui::BeginItemTooltip()) {
+                        if (ui::BeginProperties(u8"##session")) {
+                            ui::Property(TR(u8"Player"));
+                            ImGui::TextUnformatted(GameInfo::localPlayer.c_str());
+                            ui::Property(TR(u8"Profile ID"));
+                            ImGui::Text(u8"%d", GameInfo::profileID);
+                            ui::Property(TR(u8"Planet ID"));
+                            ImGui::Text(u8"%d", GameInfo::planetID);
+                            ui::Property(TR(u8"Server IP"));
+                            ImGui::TextUnformatted(GameInfo::serverIP.c_str());
+                            ui::Property(TR(u8"Region"));
+                            ImGui::TextUnformatted(GameInfo::region.c_str());
+                            ui::Property(TR(u8"Language"));
+                            ImGui::TextUnformatted(GameInfo::language.c_str());
+                            ui::EndProperties();
+                        }
+                        ImGui::EndTooltip();
+                    }
+                    ImGui::Separator();
+                    ImGui::TextDisabled(u8"%.0f %s", GameInfo::fps, TR(u8"FPS"));
+                    ImGui::Separator();
+                    ImGui::TextDisabled(u8"%d ms", GameInfo::ping);
+                    ImGui::Separator();
+                    ImGui::TextDisabled(u8"%s: %d", TR(u8"Objects"), GameInfo::worldObjects);
+                    ImGui::Separator();
+                    ImGui::TextDisabled(u8"%s: %d", TR(u8"Players"), GameInfo::playerCount);
+                    const char* version = GameInfo::gameVersion.c_str();
+                    float right = ImGui::CalcTextSize(version).x + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+                    ImGui::SameLine(ImGui::GetWindowWidth() - right);
+                    ImGui::TextDisabled(u8"%s", version);
+                    ImGui::EndMenuBar();
+                }
+            }
+            ImGui::End();
+        }
 
-        static bool initializationNotification = false;
+        void BuildLayout(ImGuiID dock, ImVec2 size) {
+            ImGui::DockBuilderRemoveNode(dock);
+            ImGui::DockBuilderAddNode(dock, ImGuiDockNodeFlags_DockSpace);
+            ImGui::DockBuilderSetNodeSize(dock, size);
+            ImGuiID left, rest, right, center, rightTop, rightBottom, bottom, main;
+            ImGui::DockBuilderSplitNode(dock, ImGuiDir_Left, 0.2f, &left, &rest);
+            ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.3f, &right, &center);
+            ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.45f, &rightBottom, &rightTop);
+            ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.3f, &bottom, &main);
+            ImGui::DockBuilderDockWindow(u8"###Viewport", main);
+            ImGui::DockBuilderDockWindow(u8"###Blueprints", main);
+            ImGui::DockBuilderDockWindow(u8"###Explorer", left);
+            ImGui::DockBuilderDockWindow(u8"###Properties", rightTop);
+            ImGui::DockBuilderDockWindow(u8"###Tools", rightBottom);
+            for (const char* window : {u8"###Inventory", u8"###Clipboard", u8"###History", u8"###Players", u8"###Console"})
+                ImGui::DockBuilderDockWindow(window, bottom);
+            ImGui::DockBuilderFinish(dock);
+            focusViewport = 3;
+        }
 
-        if (!hModule) {
-            hModule = GetModuleHandle(u8"KogamaStudio.dll");
-            if (hModule) {
-                DebugLog(u8"[menu] KogamaStudio.dll loaded\n");
+        void Dockspace() {
+            ImGuiViewport* viewport = ImGui::GetMainViewport();
+            ImGuiID dock = ImGui::GetID(DockName);
+            if (layoutReset || !ImGui::DockBuilderGetNode(dock)) {
+                layoutReset = false;
+                BuildLayout(dock, viewport->WorkSize);
+            }
+            ImGui::DockSpaceOverViewport(dock, viewport, ImGuiDockNodeFlags_NoWindowMenuButton);
+        }
+
+        void Viewport() {
+            viewportImageMin = {};
+            viewportImageMax = {};
+            viewportHovered = false;
+            if (focusViewport > 0) {
+                ImGui::SetNextWindowFocus();
+                focusViewport--;
+            }
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+            bool visible = ui::BeginPanel(u8"Viewport", ICON_FA_GAMEPAD, TR(u8"Viewport"), nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+            ImGui::PopStyleVar();
+            if (visible) {
+                ImVec2 size = ImGui::GetContentRegionAvail();
+                ImVec2 origin = ImGui::GetCursorScreenPos();
+                if (size.x > 0 && size.y > 0) {
+                    viewportImageMin = origin;
+                    viewportImageMax = ImVec2(origin.x + size.x, origin.y + size.y);
+                    viewportHovered = ImGui::IsWindowHovered();
+                    ImGui::InvisibleButton(u8"##game", size);
+                    if (ImGui::BeginDragDropTarget()) {
+                        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(u8"INVENTORY_ITEM"))
+                            SendCommand((std::string(u8"world_place_item|") + (const char*)payload->Data).c_str());
+                        ImGui::EndDragDropTarget();
+                    }
+                }
+            }
+            ui::EndPanel();
+        }
+
+        void Panels() {
+            bool editing = Editing();
+            for (Panel& panel : panels)
+                if (panel.open && (editing || !panel.editOnly)) panel.render();
+        }
+
+        void Modals() {
+            if (settingsRequested) {
+                ui::OpenModal(u8"Settings");
+                settingsRequested = false;
+            }
+            if (aboutRequested) {
+                ui::OpenModal(u8"About");
+                aboutRequested = false;
+            }
+            if (ui::BeginModal(u8"Settings", TR(u8"Settings"), 620.0f)) {
+                ImGui::BeginChild(u8"##settings", ImVec2(0.0f, (std::min)(380.0f, ImGui::GetMainViewport()->WorkSize.y * 0.55f)));
+                Appearance::Render();
+                ImGui::EndChild();
+                Explorer::GroupingWarning();
+                ui::ModalFooter(TR(u8"Close"));
+                ui::EndModal();
+            }
+            if (ui::BeginModal(u8"About", TR(u8"About"), 360.0f)) {
+                ImGui::TextUnformatted(u8"KogamaStudio v" KS_VERSION);
+                ImGui::Spacing();
+                ImGui::TextWrapped(u8"%s Becko, MauryDev, mindiro", TR(u8"Special Thanks to:"));
+                ui::ModalFooter(TR(u8"Close"));
+                ui::EndModal();
             }
         }
 
-        ImGuiIO& io = ImGui::GetIO();
+        void ViewportCursor() {
+            if (Blueprints::g_wantBlockViewport) viewportHovered = false;
+            static bool reported = false;
+            if (viewportHovered == reported) return;
+            reported = viewportHovered;
+            SendCommand(viewportHovered ? u8"viewport_cursor|false" : u8"viewport_cursor|true");
+        }
+    }
 
+    void ShowPanel(const char* window) {
+        for (Panel& panel : panels)
+            if (!strcmp(panel.window, window)) panel.open = true;
+    }
 
-        // Style setup (one-time)
+    void Init() {
         static bool styled = false;
         if (!styled) {
             Appearance::LoadSettings();
-            ImGui::GetStyle().ScaleAllSizes(scale);
             styled = true;
-            DebugLog(u8"[menu] Style applied.\n");
         }
 
-        // Welcome window on first run (shows before F2)
         Welcome::Init();
         welcomeOpen = Welcome::IsOpen();
         if (welcomeOpen) {
@@ -135,191 +302,22 @@ namespace menu {
             return;
         }
 
-        if (!isOpen) {
+        if (!isOpen || !pipe::openMenu) {
             viewportHovered = false;
-            return;
-        }
-
-        if (!pipe::openMenu) {
             viewportImageMin = {};
             viewportImageMax = {};
             return;
         }
 
-        if (typing) {
-            io.WantCaptureKeyboard = true;
-        }
-        else {
-            io.WantCaptureKeyboard = false;
-        }
+        ImGui::GetIO().WantCaptureKeyboard = typing;
         typing = false;
 
-        ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(mainViewport->WorkPos);
-        ImGui::SetNextWindowSize(mainViewport->WorkSize);
-        ImGui::SetNextWindowViewport(mainViewport->ID);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-        ImGui::Begin(u8"##DockSpaceHost", nullptr,
-            ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
-            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus);
-        ImGui::PopStyleVar(3);
-        ImGuiID dockId = ImGui::GetID(u8"MainDockSpace");
-        ImGui::DockSpace(dockId, ImVec2(0.0f, 0.0f));
-
-        static bool dockLayoutBuilt = false;
-        if (!dockLayoutBuilt)
-        {
-            dockLayoutBuilt = true;
-            if (ImGui::DockBuilderGetNode(dockId) != nullptr)
-                goto dockLayoutDone; // layout loaded from ini, skip default build
-            ImGui::DockBuilderRemoveNode(dockId);
-            ImGui::DockBuilderAddNode(dockId, ImGuiDockNodeFlags_DockSpace);
-            ImGui::DockBuilderSetNodeSize(dockId, mainViewport->WorkSize);
-
-            ImGuiID dockRight, dockLeft;
-            ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Right, 0.32f, &dockRight, &dockLeft);
-
-            ImGuiID dockRightTop, dockRightBot;
-            ImGui::DockBuilderSplitNode(dockRight, ImGuiDir_Down, 0.5f, &dockRightBot, &dockRightTop);
-
-            ImGuiID dockRightMid, dockRightBottom;
-            ImGui::DockBuilderSplitNode(dockRightBot, ImGuiDir_Down, 0.5f, &dockRightBottom, &dockRightMid);
-
-            ImGui::DockBuilderDockWindow(u8"###Viewport",      dockLeft);
-            // right top: explorer + tools
-            ImGui::DockBuilderDockWindow(u8"###Explorer",      dockRightTop);
-            ImGui::DockBuilderDockWindow(u8"###Tools",         dockRightTop);
-            // right mid: properties + clipboard + history
-            ImGui::DockBuilderDockWindow(u8"###Properties",    dockRightMid);
-            ImGui::DockBuilderDockWindow(u8"###Clipboard",     dockRightMid);
-            ImGui::DockBuilderDockWindow(u8"###History",       dockRightMid);
-            // right bottom: secondary panels
-            ImGui::DockBuilderDockWindow(u8"###GameInfo",      dockRightBottom);
-            ImGui::DockBuilderDockWindow(u8"###Inventory",     dockRightBottom);
-            ImGui::DockBuilderDockWindow(u8"###Players",       dockRightBottom);
-            ImGui::DockBuilderDockWindow(u8"###Camera",        dockRightBottom);
-            ImGui::DockBuilderDockWindow(u8"###ResourcePacks", dockRightBottom);
-            ImGui::DockBuilderDockWindow(u8"###Translate",     dockRightBottom);
-            ImGui::DockBuilderDockWindow(u8"###About",         dockRightBottom);
-            ImGui::DockBuilderDockWindow(u8"###Console",       dockRightBottom);
-            ImGui::DockBuilderDockWindow(u8"###Worlds",        dockRightBottom);
-            ImGui::DockBuilderDockWindow(u8"###Blueprints",    dockLeft);
-            ImGui::DockBuilderDockWindow(u8"###Performance",   dockRightBottom);
-            ImGui::DockBuilderFinish(dockId);
-            dockLayoutDone:;
-        }
-
-        ImGui::End();
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-        ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin((std::string(TR(u8"Viewport")) + u8"###Viewport").c_str(), nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
-        {
-            ImVec2 contentSize = ImGui::GetContentRegionAvail();
-            ImVec2 contentOrigin = ImGui::GetCursorScreenPos();
-            if (contentSize.x > 0 && contentSize.y > 0)
-            {
-                // Letterbox: scale game frame to fit panel while preserving aspect ratio
-                UINT frameW = 0, frameH = 0;
-                hooks_dx11::GetGameFrameSize(frameW, frameH);
-                float aspect = (frameW > 0 && frameH > 0) ? (float)frameW / (float)frameH : 16.0f / 9.0f;
-
-                float imgW = contentSize.x;
-                float imgH = contentSize.x / aspect;
-                if (imgH > contentSize.y) { imgH = contentSize.y; imgW = contentSize.y * aspect; }
-
-                float offX = (contentSize.x - imgW) * 0.5f;
-                float offY = (contentSize.y - imgH) * 0.5f;
-
-                ID3D11ShaderResourceView* srv = hooks_dx11::GetGameFrameSRV();
-                if (srv)
-                {
-                    ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + offX, ImGui::GetCursorPosY() + offY));
-                    ImGui::Image((ImTextureID)(void*)srv, ImVec2(imgW, imgH));
-                    viewportHovered = ImGui::IsItemHovered();
-                    viewportImageMin = ImGui::GetItemRectMin();
-                    viewportImageMax = ImGui::GetItemRectMax();
-                    if (ImGui::BeginDragDropTarget())
-                    {
-                        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(u8"INVENTORY_ITEM"))
-                            SendCommand((std::string(u8"world_place_item|") + (const char*)payload->Data).c_str());
-                        ImGui::EndDragDropTarget();
-                    }
-                }
-                else
-                {
-                    viewportHovered = ImGui::IsWindowHovered();
-                    viewportImageMin = contentOrigin;
-                    viewportImageMax = ImVec2(contentOrigin.x + contentSize.x, contentOrigin.y + contentSize.y);
-                }
-            }
-        }
-        ImGui::End();
-        ImGui::PopStyleVar();
-
-        // --- Main panels (all manage their own Begin/End) ---
-        bool playLocked = (GameInfo::gameMode == "Play" && !Appearance::IsExtendedActive());
-
-        if (!playLocked) {
-            Explorer::Render();
-            Tools::Render();
-            Properties::Render();
-            Clipboard::Render();
-            History::Render();
-            Inventory::Render();
-            Players::Render();
-            Worlds::Render();
-            Blueprints::Render();
-        }
-
-        GameInfo::Render();
-        CameraPanel::Render();
-        ResourcePacks::Render();
-        Translate::Render();
-        About::Render();
-        Performance::Render();
-
-        // Block viewport input when Blueprints panel is hovered/focused
-        if (Blueprints::g_wantBlockViewport)
-            viewportHovered = false;
-
-        static bool prevViewportHovered = false;
-        if (viewportHovered != prevViewportHovered)
-        {
-            prevViewportHovered = viewportHovered;
-            SendCommand(viewportHovered ? u8"viewport_cursor|false" : u8"viewport_cursor|true");
-        }
-
-        if (ImGui::BeginMainMenuBar())
-        {
-            menuBarHeight = ImGui::GetWindowSize().y;
-            if (ImGui::MenuItem(TR(u8"Settings")))
-                Windows::settingsOpen = !Windows::settingsOpen;
-            if (ImGui::MenuItem(TR(u8"Console")))
-                Windows::consoleOpen = !Windows::consoleOpen;
-            Caption();
-            ImGui::EndMainMenuBar();
-        }
-
-        if (Windows::settingsOpen) {
-            ImGui::OpenPopup(u8"##SettingsModal");
-            Windows::settingsOpen = false;
-        }
-        ImGui::SetNextWindowSize(ImVec2(600, 450), ImGuiCond_Appearing);
-        if (ImGui::BeginPopupModal(u8"##SettingsModal", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize)) {
-            // Header
-            ImGui::Text(TR(u8"Settings"));
-            ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20);
-            if (ImGui::SmallButton(u8"X"))
-                ImGui::CloseCurrentPopup();
-            ImGui::Separator();
-            Appearance::Render(true);
-            ImGui::EndPopup();
-        }
-        if (Windows::consoleOpen) AppLog::Render();
-
+        MenuBar();
+        StatusBar();
+        Dockspace();
+        Viewport();
+        Panels();
+        Modals();
+        ViewportCursor();
     }
 }

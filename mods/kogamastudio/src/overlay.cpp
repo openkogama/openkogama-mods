@@ -38,6 +38,9 @@ namespace overlay {
         constexpr LONG MinWidth = 640;
         constexpr LONG MinHeight = 400;
         constexpr int MaxTries = 3;
+        constexpr int SettleFrames = 6;
+        constexpr DWORD IdleMilliseconds = 250;
+        constexpr DWORD HiddenMilliseconds = 30;
 
         HWND game = nullptr;
         HWND window = nullptr;
@@ -47,6 +50,7 @@ namespace overlay {
         IDCompositionTarget* compositionTarget = nullptr;
         IDCompositionVisual* visual = nullptr;
         std::atomic<bool> running = false;
+        std::atomic<bool> failed = false;
         std::string iniPath;
         std::string title;
         RECT placed{};
@@ -60,6 +64,7 @@ namespace overlay {
         std::atomic<bool> leaving = false;
         bool maximized = false;
         int tries = 0;
+        int pending = SettleFrames;
         bool shaped = false;
         bool shown = false;
         bool typing = false;
@@ -164,7 +169,7 @@ namespace overlay {
             SHGetFolderPathA(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, localAppData);
             std::string configDir = std::string(localAppData) + "\\KogamaStudio\\Config";
             SHCreateDirectoryExA(NULL, configDir.c_str(), NULL);
-            iniPath = configDir + "\\layout.ini";
+            iniPath = configDir + "\\studio.ini";
             io.IniFilename = iniPath.c_str();
             io.IniSavingRate = 5.0f;
 
@@ -183,9 +188,6 @@ namespace overlay {
             static const ImWchar iconRanges[] = {ICON_MIN_FA, ICON_MAX_FA, 0};
             io.Fonts->AddFontFromMemoryCompressedBase85TTF(FA_Solid_compressed_data_base85, size, &icons, iconRanges);
 
-            Appearance::headerFont = io.Fonts->AddFontFromFileTTF(fontPath, size * 2.0f, nullptr, glyphRanges);
-            if (!Appearance::headerFont) Appearance::headerFont = io.Fonts->AddFontDefault();
-
             io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
             io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
             ImGui::StyleColorsDark();
@@ -196,16 +198,17 @@ namespace overlay {
             ImGui_ImplDX11_Init(hooks_dx11::gDevice, hooks_dx11::gContext);
         }
 
-        void Follow() {
+        bool Follow() {
             RECT now = docked ? ScreenRect(window) : GameRect();
             int width = now.right - now.left, height = now.bottom - now.top;
-            if (width <= 0 || height <= 0 || EqualRect(&now, &placed)) return;
+            if (width <= 0 || height <= 0 || EqualRect(&now, &placed)) return false;
             bool resized = width != placed.right - placed.left || height != placed.bottom - placed.top;
             placed = now;
             if (!docked) Place(window, now, 0);
-            if (!resized) return;
+            if (!resized) return true;
             Resize(width, height);
             shaped = false;
+            return true;
         }
 
         void Cut() {
@@ -242,10 +245,11 @@ namespace overlay {
 
         void Dock() {
             if (leaving || IsIconic(game)) return;
-            if (!pipe::openMenu || !menu::isOpen || IsRectEmpty(&hole)) {
+            if (!pipe::openMenu || !menu::isOpen) {
                 Undock();
                 return;
             }
+            if (IsRectEmpty(&hole)) return;
             if (!docked) {
                 if (!GetWindowPlacement(game, &home)) return;
                 RECT frame = VisibleFrame(game);
@@ -256,6 +260,7 @@ namespace overlay {
                 SetRectEmpty(&given);
                 docked = true;
                 Place(window, frame, 0);
+                pending = SettleFrames;
                 return;
             }
             if (IsZoomed(game)) return;
@@ -269,6 +274,7 @@ namespace overlay {
             if (EqualRect(&client, &wanted) || tries >= MaxTries) return;
             tries++;
             Place(game, Grow(wanted, Margins(Outer(game), client)), SWP_ASYNCWINDOWPOS);
+            pending = SettleFrames;
         }
 
         RECT NormalFrame() {
@@ -321,6 +327,15 @@ namespace overlay {
             Focus();
             Present();
             Show(true);
+            ImGuiIO& io = ImGui::GetIO();
+            if (io.WantTextInput || ImGui::IsAnyItemActive() || ImGui::IsMouseDown(ImGuiMouseButton_Left)) pending = (std::max)(pending, 1);
+        }
+
+        void Modifiers() {
+            ImGuiIO& io = ImGui::GetIO();
+            io.AddKeyEvent(ImGuiMod_Ctrl, (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);
+            io.AddKeyEvent(ImGuiMod_Shift, (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
+            io.AddKeyEvent(ImGuiMod_Alt, (GetAsyncKeyState(VK_MENU) & 0x8000) != 0);
         }
 
         LRESULT HitTest(HWND hwnd, LPARAM lparam) {
@@ -379,6 +394,7 @@ namespace overlay {
                 }
                 break;
             }
+            if (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST && GetForegroundWindow() != hwnd) Modifiers();
             if (ImGui_ImplWin32_WndProcHandler(hwnd, message, wparam, lparam)) return 1;
             if (message == WM_KEYDOWN && wparam == VK_F2) {
                 pipe::ProcessCommand("key_down|F2");
@@ -408,6 +424,9 @@ namespace overlay {
                 placed.left, placed.top, width, height, game, nullptr, globals::mainModule, nullptr);
             if (!window || !CreateDevice(width, height)) {
                 DebugLog("[overlay] could not create the overlay window\n");
+                if (window) DestroyWindow(window);
+                window = nullptr;
+                failed = true;
                 running = false;
                 return;
             }
@@ -415,15 +434,35 @@ namespace overlay {
             DebugLog("[overlay] ready\n");
 
             MSG message;
+            int drawn = 0;
+            ULONGLONG countedAt = GetTickCount64();
             while (running && IsWindow(game)) {
+                if (pending <= 0) MsgWaitForMultipleObjects(0, nullptr, FALSE, shown ? IdleMilliseconds : HiddenMilliseconds, QS_ALLINPUT);
                 while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
                     TranslateMessage(&message);
                     DispatchMessageW(&message);
+                    pending = SettleFrames;
                 }
-                pipe::ProcessPending();
-                Follow();
-                Draw();
-                if (!shown) Sleep(30);
+                try {
+                    if (pipe::ProcessPending()) pending = (std::max)(pending, 1);
+                    if (Follow()) pending = SettleFrames;
+                    if (pending <= 0 && !shown) continue;
+                    if (pending > 0) pending--;
+                    Draw();
+                    drawn++;
+                    if (GetTickCount64() - countedAt >= 10000) {
+                        if (shown) DebugLog("[overlay] %d frames in 10 s\n", drawn);
+                        drawn = 0;
+                        countedAt = GetTickCount64();
+                    }
+                }
+                catch (const std::exception& error) {
+                    DebugLog("[overlay] stopped: %s\n", error.what());
+                    Undock();
+                    ShowWindow(window, SW_HIDE);
+                    failed = true;
+                    break;
+                }
             }
             running = false;
         }
@@ -437,6 +476,8 @@ namespace overlay {
     }
 
     bool Running() { return running; }
+
+    bool Failed() { return failed; }
 
     void Release() {
         leaving = true;

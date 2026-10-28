@@ -14,7 +14,6 @@ namespace Properties {
     extern float rotationY;
     extern float rotationZ;
     extern bool isModel;
-    extern bool isPrevievPaste;
     extern int itemId;
     extern int groupId;
     extern int prototypeId;

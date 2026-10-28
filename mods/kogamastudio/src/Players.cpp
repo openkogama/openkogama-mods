@@ -1,7 +1,9 @@
 #include "stdafx.h"
 #include "Players.h"
 #include "MenuHelpers.h"
-#include "Translate.h"
+#include "IconsFontAwesome6.h"
+#include "GameInfo.h"
+#include "ui.h"
 
 using namespace menu;
 
@@ -42,23 +44,21 @@ namespace Players {
 
     void Render()
     {
-        ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
-        if (ImGui::Begin((std::string(TR(u8"Players")) + u8"###Players").c_str(), nullptr, flags))
+        if (ui::BeginPanel(u8"Players", ICON_FA_USERS, TR(u8"Players"), nullptr))
         {
-            if (playerList.empty()) {
-                ImGui::TextDisabled(TR(u8"No players online"));
+            if (playerList.empty()) ui::EmptyState(TR(u8"No players online"));
+            float button = ImGui::GetFrameHeight();
+            for (const auto& player : playerList)
+            {
+                ImGui::PushID(player.id.c_str());
+                ImGui::AlignTextToFramePadding();
+                bool you = player.name == GameInfo::localPlayer;
+                ImGui::TextUnformatted((std::string(ICON_FA_USER u8"  ") + player.name + (you ? std::string(u8"  (") + TR(u8"you") + u8")" : std::string())).c_str());
+                ImGui::SameLine(ImGui::GetContentRegionMax().x - button);
+                if (ui::IconButton(u8"teleport", ICON_FA_LOCATION_DOT, TR(u8"Teleport"))) SendCommand((u8"teleport_player|" + player.id).c_str());
+                ImGui::PopID();
             }
-            else {
-                for (const auto& p : playerList) {
-                    ImGui::Text("%s", p.name.c_str());
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton((std::string(TR(u8"Teleport")) + "##tp_" + p.id).c_str())) {
-                        SendCommand(("teleport_player|" + p.id).c_str());
-                    }
-                }
-            }
-        }   
-        ImGui::End();
+        }
+        ui::EndPanel();
     }
-
 }

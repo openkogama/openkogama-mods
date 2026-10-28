@@ -58,42 +58,4 @@ namespace GameInfo {
             else if (key == "language")         language = val;
         }
     }
-
-    void Render()
-    {
-        ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
-        if (ImGui::Begin((std::string(TR(u8"Game Info")) + u8"###GameInfo").c_str(), nullptr, flags))
-        {
-            ImGui::Text("%s: %.1f", TR(u8"FPS"), fps);
-            ImGui::SameLine(0, 20);
-            ImGui::Text("%s: %d ms", TR(u8"Ping"), ping);
-            ImGui::Separator();
-
-            if (ImGui::CollapsingHeader(TR(u8"Session"), ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                ImGui::Text("%s: %s", TR(u8"Player"),         localPlayer.c_str());
-                ImGui::Text("%s: %d", TR(u8"Profile ID"),     profileID);
-                ImGui::Text("%s: %d", TR(u8"Planet ID"),      planetID);
-                ImGui::Text("%s: %s", TR(u8"Game Mode"),      gameMode.c_str());
-                ImGui::Text("%s: %s", TR(u8"Server IP"),      serverIP.c_str());
-                ImGui::Text("%s: %s", TR(u8"Region"),         region.c_str());
-                ImGui::Text("%s: %s", TR(u8"Language"),       language.c_str());
-                ImGui::Text("%s: %d", TR(u8"Players Online"), playerCount);
-            }
-
-            if (ImGui::CollapsingHeader(TR(u8"World"), ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                ImGui::Text("%s: %d", TR(u8"World Objects"),     worldObjects);
-                ImGui::Text("%s: %d", TR(u8"Logic Objects"),    logicObjects);
-                ImGui::Text("%s: %d", TR(u8"Links"),            links);
-                ImGui::Text("%s: %d", TR(u8"Object Links"),     objectLinks);
-                ImGui::Text("%s: %d", TR(u8"Prototypes"),       prototypes);
-                ImGui::Text("%s: %d", TR(u8"Unique Prototypes"), uniquePrototypes);
-            }
-
-            ImGui::Separator();
-            ImGui::Text("%s: %s", TR(u8"Game Version"), gameVersion.c_str());
-        }
-        ImGui::End();
-    }
 }

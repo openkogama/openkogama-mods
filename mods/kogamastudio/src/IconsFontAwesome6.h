@@ -58,6 +58,7 @@
 #define ICON_FA_FILE                    "\xef\x85\x9b"   // f15b
 #define ICON_FA_FOLDER                  "\xef\x81\xbb"   // f07b
 #define ICON_FA_FOLDER_OPEN             "\xef\x81\xbc"   // f07c
+#define ICON_FA_FOLDER_PLUS             "\xef\x99\x9e"   // f65e
 #define ICON_FA_LAYER_GROUP             "\xef\x97\xbd"   // f5fd
 #define ICON_FA_OBJECT_GROUP            "\xef\x89\x87"   // f247
 #define ICON_FA_OBJECT_UNGROUP          "\xef\x89\x88"   // f248
@@ -80,6 +81,11 @@
 #define ICON_FA_GLOBE                   "\xef\x82\xac"   // f0ac
 #define ICON_FA_SERVER                  "\xef\x88\xb3"   // f233
 #define ICON_FA_NETWORK_WIRED           "\xef\x9b\xbf"   // f6ff
+#define ICON_FA_SITEMAP                 "\xef\x83\xa8"   // f0e8
+#define ICON_FA_SLIDERS                 "\xef\x87\x9e"   // f1de
+#define ICON_FA_TERMINAL                "\xef\x84\xa0"   // f120
+#define ICON_FA_ARROW_DOWN_WIDE_SHORT   "\xef\x85\xa0"   // f160
+#define ICON_FA_PUZZLE_PIECE            "\xef\x84\xae"   // f12e
 #define ICON_FA_MAP                     "\xef\x89\xb9"   // f279
 #define ICON_FA_LOCATION_DOT            "\xef\x8f\x85"   // f3c5
 

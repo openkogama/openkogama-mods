@@ -22,5 +22,4 @@ namespace GameInfo {
     extern std::string language;
 
     void SetData(const std::string& data);
-    void Render();
 }

@@ -1,6 +1,10 @@
 #include "stdafx.h"
 #include "Console.h"
 #include <string>
+#include "IconsFontAwesome6.h"
+#include "ui.h"
+#include <algorithm>
+#include <cctype>
 
 namespace AppLog {
 
@@ -44,59 +48,59 @@ namespace AppLog {
 
     void Render() {
         EnsureInit();
-        ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
-        if (!ImGui::Begin((std::string(TR(u8"Console")) + u8"###Console").c_str(), nullptr, flags)) {
-            ImGui::End();
-            return;
-        }
-
-        if (ImGui::Button(TR(u8"Clear"))) {
-            EnterCriticalSection(&cs);
-            entries.clear();
-            LeaveCriticalSection(&cs);
-        }
-        ImGui::SameLine();
-        ImGui::Checkbox(TR(u8"Auto Scroll"), &autoScroll);
-        ImGui::SameLine();
-        ImGui::Text(TR(u8"Filter"));
-        ImGui::SameLine();
-        ImGui::PushItemWidth(200.0f);
-        ImGui::InputText(u8"##ConsoleFilter", filterBuf, sizeof(filterBuf));
-        ImGui::PopItemWidth();
-        ImGui::Separator();
-
-        ImGui::BeginChild(u8"##ConsoleLog", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
-
-        std::vector<LogEntry> snapshot;
-        EnterCriticalSection(&cs);
-        snapshot = entries;
-        LeaveCriticalSection(&cs);
-
-        for (const auto& e : snapshot) {
-            if (filterBuf[0] != u8'\0' && e.msg.find(filterBuf) == std::string::npos)
-                continue;
-
-            ImVec4 color;
-            switch (e.type) {
-                case LogType::Incoming: color = ImVec4(0.4f, 1.0f, 0.4f, 1.0f);  break;
-                case LogType::Outgoing: color = ImVec4(1.0f, 0.85f, 0.35f, 1.0f); break;
-                case LogType::Warning:  color = ImVec4(1.0f, 0.6f, 0.1f, 1.0f);  break;
-                case LogType::Error:    color = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);  break;
-                default:                color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);  break;
+        if (ui::BeginPanel(u8"Console", ICON_FA_TERMINAL, TR(u8"Console"), nullptr)) {
+            float clear = ImGui::CalcTextSize(ICON_FA_TRASH).x + ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetStyle().ItemSpacing.x;
+            float scroll = ImGui::GetFrameHeight() + ImGui::CalcTextSize(TR(u8"Auto Scroll")).x + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::GetStyle().ItemSpacing.x;
+            ImGui::SetNextItemWidth(-(clear + scroll));
+            ImGui::InputTextWithHint(u8"##filter", TR(u8"Filter"), filterBuf, sizeof(filterBuf));
+            ImGui::SameLine();
+            ImGui::Checkbox(TR(u8"Auto Scroll"), &autoScroll);
+            ImGui::SameLine();
+            if (ui::IconButton(u8"clear", ICON_FA_TRASH, TR(u8"Clear"))) {
+                EnterCriticalSection(&cs);
+                entries.clear();
+                LeaveCriticalSection(&cs);
             }
 
-            ImGui::PushStyleColor(ImGuiCol_Text, color);
-            std::string line = std::string(e.time) + u8"  " + e.msg;
-            ImGui::TextUnformatted(line.c_str());
-            ImGui::PopStyleColor();
+            ImGui::BeginChild(u8"##log", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+            EnterCriticalSection(&cs);
+            std::string query = filterBuf;
+            std::transform(query.begin(), query.end(), query.begin(), [](unsigned char ch) { return (char)std::tolower(ch); });
+            std::vector<int> shown;
+            for (int i = 0; i < (int)entries.size(); i++) {
+                if (!query.empty()) {
+                    std::string text = entries[i].msg;
+                    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch) { return (char)std::tolower(ch); });
+                    if (text.find(query) == std::string::npos) continue;
+                }
+                shown.push_back(i);
+            }
+            if (shown.empty()) ui::EmptyState(TR(u8"Nothing logged yet"));
+            ImGuiListClipper clipper;
+            clipper.Begin((int)shown.size());
+            while (clipper.Step())
+                for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++) {
+                    const LogEntry& e = entries[shown[row]];
+                    ImVec4 color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+                    switch (e.type) {
+                        case LogType::Incoming: color = ImVec4(0.4f, 1.0f, 0.4f, 1.0f); break;
+                        case LogType::Outgoing: color = ImVec4(1.0f, 0.85f, 0.35f, 1.0f); break;
+                        case LogType::Warning: color = ImVec4(1.0f, 0.6f, 0.1f, 1.0f); break;
+                        case LogType::Error: color = ImVec4(1.0f, 0.3f, 0.3f, 1.0f); break;
+                    }
+                    ImGui::TextDisabled(u8"%s", e.time);
+                    ImGui::SameLine();
+                    ImGui::PushStyleColor(ImGuiCol_Text, color);
+                    ImGui::TextUnformatted(e.msg.c_str());
+                    ImGui::PopStyleColor();
+                }
+            if (scrollToBottom) {
+                ImGui::SetScrollHereY(1.0f);
+                scrollToBottom = false;
+            }
+            LeaveCriticalSection(&cs);
+            ImGui::EndChild();
         }
-
-        if (scrollToBottom) {
-            ImGui::SetScrollHereY(1.0f);
-            scrollToBottom = false;
-        }
-
-        ImGui::EndChild();
-        ImGui::End();
+        ui::EndPanel();
     }
 }

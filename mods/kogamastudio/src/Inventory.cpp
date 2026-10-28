@@ -4,6 +4,9 @@
 #include "MenuHelpers.h"
 #include "UILocale.h"
 #include "Properties.h"
+#include "IconsFontAwesome6.h"
+#include "ui.h"
+#include <cctype>
 
 using namespace menu;
 
@@ -59,81 +62,90 @@ namespace Inventory {
         return selectedItemCopy;
     }
 
-    static int CountTotal()
-    {
-        int n = 0;
-        for (const auto& kv : itemsByCategory) n += (int)kv.second.size();
-        return n;
+    namespace {
+        std::string Lower(std::string text) {
+            std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+            return text;
+        }
+
+        std::string LabelOf(const InventoryItem& item) { return item.name.empty() ? u8"ID " + item.id : item.name; }
+
+        bool Matches(const InventoryItem& item, const std::string& query) {
+            return query.empty() || Lower(item.name).find(query) != std::string::npos || item.id.find(query) != std::string::npos;
+        }
+
+        void Select(const InventoryItem& item) {
+            selectedId = item.id;
+            selectedItemCopy = item;
+            hasSelection = true;
+            Properties::targetObjectId = u8"-1";
+        }
+
+        void Toolbar() {
+            float refresh = ImGui::CalcTextSize(ICON_FA_ROTATE).x + ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetStyle().ItemSpacing.x;
+            float half = (ImGui::GetContentRegionAvail().x - refresh - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+            ImGui::SetNextItemWidth(half);
+            std::string preview = activeCategoryName.empty() ? TR(u8"No items") : activeCategoryName;
+            if (ImGui::BeginCombo(u8"##category", preview.c_str())) {
+                for (const auto& category : itemsByCategory) {
+                    bool selected = category.first == activeCategoryName;
+                    std::string label = category.first + u8"  (" + std::to_string(category.second.size()) + u8")##" + category.first;
+                    if (ImGui::Selectable(label.c_str(), selected)) activeCategoryName = category.first;
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-refresh);
+            ImGui::InputTextWithHint(u8"##search", TR(u8"Search"), filterBuf, sizeof(filterBuf));
+            if (!typing) typing = ImGui::IsItemActive();
+            ImGui::SameLine();
+            if (ui::IconButton(u8"refresh", ICON_FA_ROTATE, TR(u8"Refresh"))) {
+                Clear();
+                SendCommand(u8"inventory_refresh");
+            }
+        }
+
+        void ItemRow(const InventoryItem& item) {
+            ImGui::PushID(item.id.c_str());
+            if (ImGui::Selectable(LabelOf(item).c_str(), hasSelection && selectedId == item.id)) Select(item);
+            ImGui::SetItemTooltip(u8"%s\nID %s", item.categoryName.c_str(), item.id.c_str());
+            if (ImGui::BeginDragDropSource()) {
+                ImGui::SetDragDropPayload(u8"INVENTORY_ITEM", item.id.c_str(), item.id.size() + 1);
+                ImGui::Text(u8"%s  %s", ICON_FA_CUBE, LabelOf(item).c_str());
+                ImGui::EndDragDropSource();
+            }
+            if (ImGui::BeginPopupContextItem(u8"##item")) {
+                if (ImGui::MenuItem(TR(u8"Place in world"))) SendCommand((u8"world_place_item|" + item.id).c_str());
+                ImGui::Separator();
+                if (ImGui::MenuItem(TR(u8"Remove from Assets"))) SendCommand((u8"inventory_remove|" + item.id).c_str());
+                ImGui::EndPopup();
+            }
+            ImGui::PopID();
+        }
     }
 
     void Render()
     {
-        ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
-        if (ImGui::Begin((std::string(TR(u8"Inventory")) + u8"###Inventory").c_str(), nullptr, flags))
-        {
-            if (ImGui::Button(TR(u8"Refresh")))
-            {
-                Clear();
-                SendCommand(u8"inventory_refresh");
+        if (ui::BeginPanel(u8"Inventory", ICON_FA_CUBES, TR(u8"Assets"), nullptr)) {
+            if (!itemsByCategory.empty() && itemsByCategory.find(activeCategoryName) == itemsByCategory.end())
+                activeCategoryName = itemsByCategory.begin()->first;
+            Toolbar();
+            ImGui::BeginChild(u8"##items");
+            if (itemsByCategory.empty()) ui::EmptyState(TR(u8"No items"));
+            else {
+                std::string query = Lower(filterBuf);
+                std::vector<const InventoryItem*> shown;
+                for (const InventoryItem& item : itemsByCategory.at(activeCategoryName))
+                    if (Matches(item, query)) shown.push_back(&item);
+                if (shown.empty()) ui::EmptyState(TR(u8"Nothing matches the search"));
+                ImGuiListClipper clipper;
+                clipper.Begin((int)shown.size());
+                while (clipper.Step())
+                    for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) ItemRow(*shown[i]);
             }
-
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(-1);
-            ImGui::InputText(u8"##inventory_filter", filterBuf, sizeof(filterBuf));
-            if (!typing) typing = ImGui::IsItemActive();
-
-            ImGui::Separator();
-            ImGui::TextDisabled("%s: %d", TR(u8"Items"), CountTotal());
-
-            std::string filter = filterBuf;
-            std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
-
-            if (itemsByCategory.empty())
-            {
-                ImGui::TextDisabled(TR(u8"No items"));
-            }
-            else
-            {
-                // Ensure activeCategoryName is valid
-                if (itemsByCategory.find(activeCategoryName) == itemsByCategory.end())
-                    activeCategoryName = itemsByCategory.begin()->first;
-
-                const auto& activeItems = itemsByCategory.at(activeCategoryName);
-                int visibleCount = (int)std::count_if(activeItems.begin(), activeItems.end(), [&](const InventoryItem& i) {
-                    if (filter.empty()) return true;
-                    std::string n = i.name; std::transform(n.begin(), n.end(), n.begin(), ::tolower);
-                    return n.find(filter) != std::string::npos || i.id.find(filter) != std::string::npos;
-                });
-
-                ImGui::SetNextItemWidth(-1);
-                if (ImGui::BeginCombo(u8"##cat", (activeCategoryName + " (" + std::to_string((int)itemsByCategory.at(activeCategoryName).size()) + ")").c_str()))
-                {
-                    for (const auto& kv : itemsByCategory)
-                    {
-                        bool selected = (kv.first == activeCategoryName);
-                        if (ImGui::Selectable((kv.first + " (" + std::to_string((int)kv.second.size()) + ")##" + kv.first).c_str(), selected)) activeCategoryName = kv.first;
-                        if (selected) ImGui::SetItemDefaultFocus();
-                    }
-                    ImGui::EndCombo();
-                }
-
-                ImGui::BeginChild(u8"##inv_list", ImVec2(0, 0), false);
-                for (const auto& item : activeItems)
-                {
-                    if (!filter.empty()) { std::string n = item.name; std::transform(n.begin(), n.end(), n.begin(), ::tolower); if (n.find(filter) == std::string::npos && item.id.find(filter) == std::string::npos) continue; }
-                    std::string label = (item.name.empty() ? (u8"[ID " + item.id + u8"]") : item.name) + u8"##" + item.id;
-                    if (ImGui::Selectable(label.c_str(), selectedId == item.id)) { selectedId = item.id; selectedItemCopy = item; hasSelection = true; Properties::targetObjectId = u8"-1"; }
-                    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None))
-                    {
-                        ImGui::SetDragDropPayload(u8"INVENTORY_ITEM", item.id.c_str(), item.id.size() + 1);
-                        ImGui::Text(u8"%s", (item.name.empty() ? (u8"[ID " + item.id + u8"]") : item.name).c_str());
-                        ImGui::EndDragDropSource();
-                    }
-                }
-                ImGui::EndChild();
-            }
+            ImGui::EndChild();
         }
-        ImGui::End();
+        ui::EndPanel();
     }
-
 }

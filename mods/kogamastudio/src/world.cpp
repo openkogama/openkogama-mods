@@ -610,7 +610,74 @@ namespace world {
             bridge::ToMenu(line);
         }
 
+        struct Grouping {
+            bool active = false;
+            std::vector<int> ids;
+            std::unordered_set<int> before;
+            Clock::time_point until;
+        } grouping;
+
+        std::unordered_set<int> Groups() {
+            std::unordered_set<int> found;
+            for (int id : Keys(Dictionary()))
+                if (TypeName(Object(id)) == "Group") found.insert(id);
+            return found;
+        }
+
+        void CreateGroup(int parent, ok_vec3 position, ok_quat rotation, ok_vec3 scale, bool localOwner) {
+            ok_object operations = Operations();
+            if (!operations) return;
+            int64_t kind = (int64_t)api->field_num(0, "BuiltInItem", "Group", 2);
+            int64_t args[] = {kind, parent, 0, Pointer(&position), Pointer(&rotation), Pointer(&scale), localOwner ? 1 : 0, 1};
+            api->invoke(operations, nullptr, "RequestBuiltInItem", 8, args, "iiopppii", 'v');
+        }
+
+        void MoveToGroup(int group, const std::vector<int>& ids) {
+            ok_object operations = Operations();
+            ok_object array = ids.empty() ? 0 : api->array_new("System.Int32", (int)ids.size());
+            if (!operations || !array) return;
+            int32_t* data = (int32_t*)api->array_data(array);
+            for (size_t i = 0; i < ids.size(); i++) data[i] = ids[i];
+            int64_t args[] = {group, (int64_t)array};
+            DebugLog("[world] moving %zu objects into %d\n", ids.size(), group);
+            api->invoke(operations, nullptr, "TransferWorldObjectsToGroup", 2, args, "io", 'v');
+            dirty = true;
+            changedAt = Clock::now() + std::chrono::seconds(1);
+        }
+
+        void GroupSelection(const std::vector<int>& ids) {
+            ok_vec3 center{0, 0, 0};
+            int counted = 0;
+            for (int id : ids) {
+                ok_object wo = Object(id);
+                if (!wo) continue;
+                ok_vec3 at = Position(wo);
+                center = {center.x + at.x, center.y + at.y, center.z + at.z};
+                counted++;
+            }
+            if (!counted) return;
+            center = {center.x / counted, center.y / counted, center.z / counted};
+            grouping = {true, ids, Groups(), Clock::now() + std::chrono::seconds(10)};
+            CreateGroup(RootGroup(), center, {0, 0, 0, 1}, {1, 1, 1}, false);
+        }
+
+        void FinishGrouping() {
+            if (!grouping.active) return;
+            if (Clock::now() > grouping.until) {
+                grouping.active = false;
+                return;
+            }
+            for (int id : Groups()) {
+                if (grouping.before.count(id)) continue;
+                grouping.active = false;
+                MoveToGroup(id, grouping.ids);
+                Select(id);
+                return;
+            }
+        }
+
         void Poll() {
+            FinishGrouping();
             int now = PlanetId();
             if (now != planet) {
                 planet = now;
@@ -645,9 +712,23 @@ namespace world {
         else if (command == "explorer_set_order") SetOrder(value);
         else if (command == "explorer_rename") Rename(value);
         else if (command == "explorer_select") Select(id);
+        else if (command == "explorer_create_group") {
+            std::vector<std::string> parts = Split(value, '|');
+            if (parts.size() >= 10) {
+                auto at = [&](int index) { return std::atof(parts[index].c_str()); };
+                CreateGroup(std::atoi(parts[0].c_str()), {(float)at(1), (float)at(2), (float)at(3)}, FromEuler(at(4), at(5), at(6)),
+                    {(float)at(7), (float)at(8), (float)at(9)}, parts.size() > 10 && parts[10] == "1");
+            }
+        }
+        else if (command == "explorer_move_to_group") {
+            size_t bar = value.find('|');
+            if (bar != std::string::npos) MoveToGroup(std::atoi(value.substr(0, bar).c_str()), Ids(value.substr(bar + 1)));
+        }
+        else if (command == "explorer_group_selection") GroupSelection(Ids(value));
         else if (command == "properties_position") { if (selected >= 0 && Vector3Of(value, vector)) SetPosition(selected, vector); }
         else if (command == "properties_rotation") { if (selected >= 0 && Vector3Of(value, vector)) SetRotation(selected, FromEuler(vector.x, vector.y, vector.z)); }
         else if (command == "properties_remove") { if (selected >= 0) Remove(selected); }
+        else if (command == "explorer_remove") Remove(id);
         else if (command == "recovery_teleport_to_object" || command == "teleport_player") TeleportTo(id);
         else if (command == "object_set_visible") {
             std::vector<std::string> parts = Split(value, '|');

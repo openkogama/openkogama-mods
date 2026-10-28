@@ -13,5 +13,9 @@ namespace History {
     void AddLinkRemoved(int outputWOID, int inputWOID);
     void AddObjectLinkAdded(int connectorWOID, int objectWOID);
     void AddObjectLinkRemoved(int connectorWOID, int objectWOID);
+    bool CanUndo();
+    bool CanRedo();
+    void Undo();
+    void Redo();
     void Render();
 }

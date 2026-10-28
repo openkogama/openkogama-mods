@@ -1,8 +1,10 @@
 #define _SILENCE_EXPERIMENTAL_FILESYSTEM_DEPRECATION_WARNING
 #include "Appearance.h"
+#include "UILocale.h"
+#include "IconsFontAwesome6.h"
+#include "ui.h"
 #include "Explorer.h"
 #include "MenuHelpers.h"
-#include "pipe.h"
 #include <filesystem>
 #include <fstream>
 #include "json.hpp"
@@ -10,23 +12,33 @@
 #include <thread>
 #pragma comment(lib, "winhttp.lib")
 
-using namespace menu;
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 
 namespace Appearance {
-    static int selectedTheme = 0;
-    static float rounding = 0.0f;
     std::string fontPath = u8"";
     float fontSize = 13.0f;
-    char fontPathBuf[256] = u8"";
-    ImFont* headerFont = nullptr;
-
-    float previewColor[4] = { 1.0f, 1.0f, 0.0f, 1.0f };
-    int   previewMode = 0;       // 0 = Outline, 1 = Surface Grid, 2 = Full Grid
-    float previewOpacity = 1.0f;
-
     bool allowDangerousDelete = false;
+
+    namespace {
+        int selectedTheme = 0;
+        float rounding = 0.0f;
+        char fontPathBuf[256] = u8"";
+        int settingsTab = 0;
+
+        std::string ConfigPath() {
+            char buf[MAX_PATH];
+            ExpandEnvironmentStringsA("%LOCALAPPDATA%\\KogamaStudio\\Config\\theme.json", buf, MAX_PATH);
+            return buf;
+        }
+
+        void ApplyTheme() {
+            if (selectedTheme == 0) ImGui::StyleColorsDark();
+            else if (selectedTheme == 1) ImGui::StyleColorsLight();
+            else if (selectedTheme == 2) ImGui::StyleColorsClassic();
+            ImGui::GetStyle().FrameRounding = rounding;
+        }
+    }
 
     // License key - stored separately from theme config
     static char licenseKey[128] = "";
@@ -109,15 +121,6 @@ namespace Appearance {
         } catch (...) {}
     }
 
-    // Settings tab index
-    static int settingsTab = 0;
-
-    std::string GetConfigPath() {
-        char buf[MAX_PATH];
-        ExpandEnvironmentStringsA("%LOCALAPPDATA%\\KogamaStudio\\Config\\theme.json", buf, MAX_PATH);
-        return buf;
-    }
-
     void SaveSettings() {
         json config;
         config[u8"theme"] = selectedTheme;
@@ -125,9 +128,6 @@ namespace Appearance {
         config[u8"fontPath"] = fontPath;
         config[u8"fontSize"] = fontSize;
         config[u8"language"] = Locale::GetCurrentLanguage();
-        config[u8"previewColor"] = { previewColor[0], previewColor[1], previewColor[2], previewColor[3] };
-        config[u8"previewMode"] = previewMode;
-        config[u8"previewOpacity"] = previewOpacity;
         config[u8"advGroupingWarnSkip"] = Explorer::advGroupingWarnSkip;
         config[u8"allowDangerousDelete"] = allowDangerousDelete;
 
@@ -139,7 +139,7 @@ namespace Appearance {
         }
         config[u8"colors"] = colors;
 
-        std::string path = GetConfigPath();
+        std::string path = ConfigPath();
         fs::create_directories(fs::path(path).parent_path());
 
         std::ofstream file(path);
@@ -148,7 +148,7 @@ namespace Appearance {
     }
 
     void LoadSettings() {
-        std::string path = GetConfigPath();
+        std::string path = ConfigPath();
         if (fs::exists(path)) {
             try {
                 json config = json::parse(std::ifstream(path));
@@ -160,14 +160,6 @@ namespace Appearance {
 
                 std::string lang = config.value(u8"language", u8"en");
                 Locale::SetLanguage(lang.c_str());
-
-                previewMode = config.value(u8"previewMode", 0);
-                previewOpacity = config.value(u8"previewOpacity", 1.0f);
-                if (config.contains(u8"previewColor")) {
-                    auto& pc = config[u8"previewColor"];
-                    previewColor[0] = pc[0]; previewColor[1] = pc[1];
-                    previewColor[2] = pc[2]; previewColor[3] = pc[3];
-                }
 
                 Explorer::advGroupingWarnSkip = config.value(u8"advGroupingWarnSkip", false);
                 allowDangerousDelete = config.value(u8"allowDangerousDelete", false);
@@ -194,85 +186,41 @@ namespace Appearance {
 
     bool IsExtendedActive() { return licenseValid && licenseChecked; }
 
-    void ApplyTheme() {
-        ImGuiStyle& style = ImGui::GetStyle();
-        ImGuiIO& io = ImGui::GetIO();
-
-        if (selectedTheme == 0) ImGui::StyleColorsDark();
-        else if (selectedTheme == 1) ImGui::StyleColorsLight();
-        else if (selectedTheme == 2) ImGui::StyleColorsClassic();
-
-        style.FrameRounding = rounding;
-    }
-
-    void Render(bool embedded) {
-        // Tabs: 0=Theme, 1=Language, 2=Cubes Preview, 3=Danger Zone, 4=License Key
-        const char* tabNames[] = {
-            TR(u8"Theme"),
-            TR(u8"Language"),
-            TR(u8"Cubes Preview"),
-            TR(u8"Danger"),
-            TR(u8"License Key"),
-        };
-        const int tabCount = 5;
-
-        float sideW = 140.0f;
-        ImVec2 avail = ImGui::GetContentRegionAvail();
-
-        // Left sidebar
-        ImGui::BeginChild(u8"##settingsSidebar", ImVec2(sideW, avail.y), true);
-        for (int i = 0; i < tabCount; i++) {
-            bool selected = (settingsTab == i);
-            if (selected) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            }
-            if (ImGui::Button(tabNames[i], ImVec2(-1, 0)))
-                settingsTab = i;
-            if (selected)
-                ImGui::PopStyleColor();
-        }
-        ImGui::EndChild();
-
-        ImGui::SameLine();
-
-        // Right content
-        ImGui::BeginChild(u8"##settingsContent", ImVec2(0, avail.y), true);
-
-        if (settingsTab == 0) {
-            // Theme
-            ImGui::Text(TR(u8"Theme:"));
-            if (ImGui::RadioButton(TR(u8"Dark"), &selectedTheme, 0)) { ApplyTheme(); SaveSettings(); }
-            if (ImGui::RadioButton(TR(u8"Light"), &selectedTheme, 1)) { ApplyTheme(); SaveSettings(); }
-            if (ImGui::RadioButton(TR(u8"Classic"), &selectedTheme, 2)) { ApplyTheme(); SaveSettings(); }
-            if (ImGui::RadioButton(TR(u8"Custom"), &selectedTheme, 3)) { SaveSettings(); }
-            ImGui::Separator();
-
-            ImGuiStyle& style = ImGui::GetStyle();
-
-            if (ImGui::InputText(TR(u8"Font Path"), fontPathBuf, sizeof(fontPathBuf))) {
-                fontPath = fontPathBuf;
-                SaveSettings();
-            }
-            if (ImGui::SliderFloat(TR(u8"Font Size"), &fontSize, 8.0f, 24.0f))
-                SaveSettings();
-            if (ImGui::SliderFloat(TR(u8"Rounding"), &rounding, 0.0f, 10.0f)) {
-                style.FrameRounding = rounding;
-                SaveSettings();
-            }
-
-            if (selectedTheme == 3) {
-                ImGui::Separator();
-                ImGui::BeginChild(u8"ColorScroll", ImVec2(0, 0), true);
-                for (int i = 0; i < ImGuiCol_COUNT; i++) {
-                    const char* colorName = ImGui::GetStyleColorName(i);
-                    if (ImGui::ColorEdit4(colorName, (float*)&style.Colors[i], ImGuiColorEditFlags_NoInputs))
-                        SaveSettings();
+    namespace {
+        void ThemePage() {
+            if (ui::Section(TR(u8"Theme")) && ui::BeginProperties(u8"##theme")) {
+                ui::Property(TR(u8"Theme"));
+                const char* themes[] = {TR(u8"Dark"), TR(u8"Light"), TR(u8"Classic"), TR(u8"Custom")};
+                if (ImGui::Combo(u8"##theme", &selectedTheme, themes, 4)) {
+                    if (selectedTheme < 3) ApplyTheme();
+                    SaveSettings();
                 }
-                ImGui::EndChild();
+                ui::Property(TR(u8"Rounding"));
+                if (ImGui::SliderFloat(u8"##rounding", &rounding, 0.0f, 10.0f)) {
+                    ImGui::GetStyle().FrameRounding = rounding;
+                    SaveSettings();
+                }
+                ui::EndProperties();
             }
-
+            if (ui::Section(TR(u8"Font")) && ui::BeginProperties(u8"##font")) {
+                ui::Property(TR(u8"Font Path"));
+                if (ImGui::InputTextWithHint(u8"##path", u8"C:\\Windows\\Fonts\\consola.ttf", fontPathBuf, sizeof(fontPathBuf))) {
+                    fontPath = fontPathBuf;
+                    SaveSettings();
+                }
+                if (!menu::typing) menu::typing = ImGui::IsItemActive();
+                ui::Property(TR(u8"Font Size"));
+                if (ImGui::SliderFloat(u8"##size", &fontSize, 8.0f, 24.0f)) SaveSettings();
+                ui::EndProperties();
+                ui::Hint(TR(u8"Font changes apply the next time the game starts."));
+            }
+            if (selectedTheme == 3 && ui::Section(TR(u8"Colors"), false)) {
+                ImGuiStyle& style = ImGui::GetStyle();
+                for (int i = 0; i < ImGuiCol_COUNT; i++)
+                    if (ImGui::ColorEdit4(ImGui::GetStyleColorName(i), (float*)&style.Colors[i], ImGuiColorEditFlags_NoInputs)) SaveSettings();
+            }
             ImGui::Spacing();
-            if (ImGui::Button(TR(u8"Reset"), ImVec2(-1, 0))) {
+            if (ui::Button(TR(u8"Reset"))) {
                 selectedTheme = 0;
                 rounding = 0.0f;
                 fontPath = u8"";
@@ -282,119 +230,82 @@ namespace Appearance {
                 SaveSettings();
             }
         }
-        else if (settingsTab == 1) {
-            // Language
-            ImGui::Text(TR(u8"Language:"));
-            ImGui::Spacing();
 
-            if (ImGui::Button(TR(u8"Refresh")))
-                Locale::RefreshLanguageList();
+        void LanguagePage() {
+            if (ui::Button(TR(u8"Refresh"))) Locale::RefreshLanguageList();
             ImGui::Spacing();
-
-            int langCount = Locale::GetLanguageCount();
-            for (int i = 0; i < langCount; i++) {
+            for (int i = 0; i < Locale::GetLanguageCount(); i++) {
                 const char* code = Locale::GetLanguageName(i);
-                const char* display = Locale::GetDisplayName(code);
-                bool sel = (strcmp(code, Locale::GetCurrentLanguage()) == 0);
-                if (ImGui::RadioButton(display, sel)) {
+                bool selected = strcmp(code, Locale::GetCurrentLanguage()) == 0;
+                if (ImGui::Selectable(Locale::GetDisplayName(code), selected)) {
                     Locale::SetLanguage(code);
                     SaveSettings();
                 }
             }
         }
-        else if (settingsTab == 2) {
-            // Cubes Preview
-            ImGui::Text(TR(u8"Cubes Preview"));
-            ImGui::Spacing();
 
-            bool changed = false;
-            if (ImGui::ColorEdit4(TR(u8"Preview Color"), previewColor, ImGuiColorEditFlags_NoInputs))
-                changed = true;
-            if (ImGui::SliderFloat(TR(u8"Line Opacity"), &previewOpacity, 0.0f, 1.0f))
-                changed = true;
-            const char* modes[] = { "Outline", "Surface Grid", "Full Grid" };
-            if (ImGui::Combo(TR(u8"Wireframe Mode"), &previewMode, modes, 3))
-                changed = true;
-
-            if (changed) {
-                SaveSettings();
-                char cmd[256];
-                snprintf(cmd, sizeof(cmd),
-                    "preview_settings|%.3f|%.3f|%.3f|%.3f|%d|%.3f",
-                    previewColor[0], previewColor[1], previewColor[2], previewColor[3],
-                    previewMode, previewOpacity);
-                SendCommand(cmd);
-            }
-        }
-        else if (settingsTab == 3) {
-            // Danger Zone
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.85f, 0.1f, 1.f));
-            ImGui::Text(u8"%s", TR(u8"Danger"));
-            ImGui::PopStyleColor();
-            ImGui::Separator();
-            ImGui::Spacing();
-
+        void EditingPage() {
+            if (!ui::BeginProperties(u8"##editing")) return;
+            ui::Property(TR(u8"Advanced Grouping"));
             bool wantEnable = Explorer::advancedGrouping;
-            if (ImGui::Checkbox(TR(u8"Advanced Grouping"), &wantEnable))
-            {
-                if (wantEnable && !Explorer::advancedGrouping)
-                {
-                    if (Explorer::advGroupingWarnSkip)
-                        Explorer::advancedGrouping = true;
-                    else
-                        Explorer::advGroupingWarnPending = true;
+            if (ImGui::Checkbox(u8"##grouping", &wantEnable)) {
+                if (wantEnable && !Explorer::advancedGrouping) {
+                    if (Explorer::advGroupingWarnSkip) Explorer::advancedGrouping = true;
+                    else Explorer::advGroupingWarnPending = true;
                 }
-                else
-                {
-                    Explorer::advancedGrouping = wantEnable;
-                }
+                else Explorer::advancedGrouping = wantEnable;
             }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip(TR(u8"Allow dragging objects into any other object,\nnot just groups."));
-
-            ImGui::Spacing();
-
-            if (ImGui::Checkbox(TR(u8"Allow Dangerous Deletion"), &allowDangerousDelete))
-                SaveSettings();
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip(TR(u8"Allow deleting terrain, game options and progression objects."));
+            ImGui::SetItemTooltip(u8"%s", TR(u8"Allow dragging objects into any other object,\nnot just groups."));
+            ui::Property(TR(u8"Allow Dangerous Deletion"));
+            if (ImGui::Checkbox(u8"##deletion", &allowDangerousDelete)) SaveSettings();
+            ImGui::SetItemTooltip(u8"%s", TR(u8"Allow deleting terrain, game options and progression objects."));
+            ui::EndProperties();
         }
-        else if (settingsTab == 4) {
-            // License Key
-            ImGui::Text(TR(u8"KogamaStudio Extended"));
+
+        void LicensePage() {
+            ui::Hint(TR(u8"Enter your license key to unlock Extended features."));
             ImGui::Spacing();
-            ImGui::TextWrapped(TR(u8"Enter your license key to unlock Extended features."));
-            ImGui::Spacing();
-            ImGui::SetNextItemWidth(-1);
+            ImGui::SetNextItemWidth(-FLT_MIN);
             ImGui::InputTextWithHint(u8"##licenseKey", u8"KSE-XXXX-XXXX-XXXX-...", licenseKey, sizeof(licenseKey));
+            if (!menu::typing) menu::typing = ImGui::IsItemActive();
             ImGui::Spacing();
-            if (licenseValidating) ImGui::BeginDisabled();
-            if (ImGui::Button(TR(u8"Activate"), ImVec2(-1, 0))) {
+            ImGui::BeginDisabled(licenseValidating);
+            if (ui::Button(TR(u8"Activate"), ui::Tone::Primary)) {
                 if (strlen(licenseKey) > 0) {
                     SaveLicense();
                     ValidateLicenseAsync(licenseKey);
-                } else {
+                }
+                else {
                     licenseChecked = true;
                     licenseValid = false;
                 }
             }
-            if (licenseValidating) ImGui::EndDisabled();
-            ImGui::Spacing();
-            if (licenseValidating) {
-                ImGui::TextUnformatted(TR(u8"Validating..."));
-            } else if (licenseChecked) {
-                if (licenseValid) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 0.8f, 0.2f, 1.0f));
-                    ImGui::TextUnformatted(TR(u8"License active"));
-                    ImGui::PopStyleColor();
-                } else if (strlen(licenseKey) > 0) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.2f, 0.2f, 1.0f));
-                    ImGui::TextUnformatted(TR(u8"Invalid key"));
-                    ImGui::PopStyleColor();
-                }
-            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (licenseValidating) ImGui::TextDisabled(u8"%s", TR(u8"Validating..."));
+            else if (licenseChecked && licenseValid) ImGui::TextUnformatted(TR(u8"License active"));
+            else if (licenseChecked && strlen(licenseKey) > 0) ImGui::TextUnformatted(TR(u8"Invalid key"));
         }
+    }
 
+    void Render() {
+        struct Page { const char* icon; const char* title; void (*render)(); };
+        const Page pages[] = {
+            {ICON_FA_PAINTBRUSH, u8"Appearance", ThemePage},
+            {ICON_FA_GLOBE, u8"Language", LanguagePage},
+            {ICON_FA_HAMMER, u8"Editing", EditingPage},
+            {ICON_FA_STAR, u8"Extended", LicensePage},
+        };
+        int count = (int)(sizeof(pages) / sizeof(pages[0]));
+        if (settingsTab >= count) settingsTab = 0;
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        ImGui::BeginChild(u8"##pages", ImVec2(ImGui::GetFontSize() * 10.0f, avail.y), ImGuiChildFlags_Borders);
+        for (int i = 0; i < count; i++)
+            if (ImGui::Selectable((std::string(pages[i].icon) + u8"  " + TR(pages[i].title)).c_str(), settingsTab == i)) settingsTab = i;
+        ImGui::EndChild();
+        ImGui::SameLine();
+        ImGui::BeginChild(u8"##page", ImVec2(0.0f, avail.y), ImGuiChildFlags_Borders);
+        pages[settingsTab].render();
         ImGui::EndChild();
     }
 }

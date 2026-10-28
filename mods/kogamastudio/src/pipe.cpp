@@ -12,8 +12,6 @@
 #include "GameInfo.h"
 #include "Inventory.h"
 #include "History.h"
-#include "Camera.h"
-#include "Appearance.h"
 
 
 namespace pipe {
@@ -21,7 +19,6 @@ namespace pipe {
     bool cursorVisible = false;
     bool gameInitialized = false;
     bool openMenu = false;
-    float generateProgress = 0.0f;
     bool isFullscreen = false;
 
     bool  isPasteBuilding  = false;
@@ -41,7 +38,8 @@ namespace pipe {
         std::string command = cmd.substr(0, pos);
         std::string param = (pos != std::string::npos) ? cmd.substr(pos + 1) : "";
 
-        DebugLog("[pipe] Command: %s, Param: %s\n", command.c_str(), param.c_str());
+        if (command != "camera_pos" && command != "gameinfo_update" && command != "players_list")
+            DebugLog("[pipe] Command: %s, Param: %s\n", command.c_str(), param.c_str());
 
         ImGuiIO& io = ImGui::GetIO();
 
@@ -64,15 +62,6 @@ namespace pipe {
         {
             menu::isOpen = true;
             gameInitialized = true;
-
-            // Send preview settings to C#
-            char cmd[256];
-            snprintf(cmd, sizeof(cmd),
-                "preview_settings|%.3f|%.3f|%.3f|%.3f|%d|%.3f",
-                Appearance::previewColor[0], Appearance::previewColor[1],
-                Appearance::previewColor[2], Appearance::previewColor[3],
-                Appearance::previewMode, Appearance::previewOpacity);
-            menu::SendCommand(cmd);
         }
         else if (command == "key_down")
         {
@@ -80,11 +69,6 @@ namespace pipe {
             {
                 openMenu = !openMenu;
             }
-        }
-        else if (command == "generate_progress")
-        {
-            float progress = std::stof(param);
-            generateProgress = progress;
         }
         else if (command == "properties_update")
         {
@@ -136,17 +120,6 @@ namespace pipe {
             pastePlacedCubes = 0;
             pasteTotalCubes  = 0;
             pasteEtaSeconds  = -1.0f;
-        }
-        else if (command == "clipboard_preview_paste_model")
-        {
-            if (param == "true")
-            {
-                Properties::isPrevievPaste = true;
-            }
-            else if (param == "false")
-            {
-                Properties::isPrevievPaste = false;
-            }
         }
         else if (command == "console_log")
         {
@@ -297,10 +270,6 @@ namespace pipe {
 
             Inventory::AddItem(item);
         }
-        else if (command == "camera_mode_unavailable")
-        {
-            CameraPanel::ResetModeSelection();
-        }
         else if (command == "world_load_progress")
         {
             size_t s1 = param.find('|');
@@ -319,10 +288,14 @@ namespace pipe {
         }
     }
 
-    void ProcessPending()
+    bool ProcessPending()
     {
+        bool any = false;
         std::string message;
-        while (bridge::NextForMenu(message))
+        while (bridge::NextForMenu(message)) {
             ProcessCommand(message);
+            if (message.rfind("camera_pos|", 0) != 0) any = true;
+        }
+        return any;
     }
 }

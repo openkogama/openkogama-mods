@@ -5,6 +5,8 @@
 #include <vector>
 #include <string>
 #include <mutex>
+#include "IconsFontAwesome6.h"
+#include "ui.h"
 
 namespace History {
 
@@ -185,134 +187,105 @@ namespace History {
         menu::SendCommand(cmd);
     }
 
+    static const char* IconOf(const Entry& e)
+    {
+        if (e.hasPosition) return ICON_FA_ARROWS_UP_DOWN_LEFT_RIGHT;
+        if (e.hasRotation) return ICON_FA_ROTATE;
+        if (e.hasLinkAdded || e.hasObjLinkAdded) return ICON_FA_LINK;
+        if (e.hasLinkRemoved || e.hasObjLinkRemoved) return ICON_FA_LINK_SLASH;
+        return ICON_FA_CIRCLE_INFO;
+    }
+
+    bool CanUndo()
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        for (const auto& e : entries)
+            if (e.isUndoable() && !e.undone) return true;
+        return false;
+    }
+
+    bool CanRedo()
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        for (const auto& e : entries)
+            if (e.isUndoable() && e.undone) return true;
+        return false;
+    }
+
+    void Undo()
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        for (auto& e : entries)
+        {
+            if (!e.isUndoable() || e.undone) continue;
+            e.undone = true;
+            e.undoOrder = ++undoCounter;
+            SendUndo(e);
+            return;
+        }
+    }
+
+    void Redo()
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        Entry* target = nullptr;
+        for (auto& e : entries)
+            if (e.isUndoable() && e.undone && (!target || e.undoOrder > target->undoOrder)) target = &e;
+        if (!target) return;
+        target->undone = false;
+        target->undoOrder = 0;
+        SendRedo(*target);
+    }
+
     void Render()
     {
-        ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
-        if (ImGui::Begin((std::string(TR(u8"History")) + u8"###History").c_str(), nullptr, flags))
+        if (ui::BeginPanel(u8"History", ICON_FA_CLOCK, TR(u8"History"), nullptr))
         {
-            bool canUndo = false, canRedo = false;
-            {
-                std::lock_guard<std::mutex> lock(mtx);
-                for (const auto& e : entries)
-                {
-                    if (!e.isUndoable()) continue;
-                    if (!e.undone) { canUndo = true; break; }
-                }
-                for (const auto& e : entries)
-                {
-                    if (!e.isUndoable()) continue;
-                    if (e.undone) { canRedo = true; break; }
-                }
-            }
-
-            if (!canUndo) ImGui::BeginDisabled();
-            if (ImGui::Button(TR(u8"Undo")))
-            {
-                std::lock_guard<std::mutex> lock(mtx);
-                for (auto& e : entries)
-                {
-                    if (!e.isUndoable() || e.undone) continue;
-                    e.undone = true;
-                    e.undoOrder = ++undoCounter;
-                    SendUndo(e);
-                    break;
-                }
-            }
-            if (!canUndo) ImGui::EndDisabled();
-
+            ImGui::BeginDisabled(!CanUndo());
+            if (ui::IconButton(u8"undo", ICON_FA_ROTATE_LEFT, TR(u8"Undo"))) Undo();
+            ImGui::EndDisabled();
             ImGui::SameLine();
-
-            if (!canRedo) ImGui::BeginDisabled();
-            if (ImGui::Button(TR(u8"Redo")))
-            {
-                std::lock_guard<std::mutex> lock(mtx);
-                Entry* target = nullptr;
-                for (auto& e : entries)
-                {
-                    if (!e.isUndoable() || !e.undone) continue;
-                    if (!target || e.undoOrder > target->undoOrder)
-                        target = &e;
-                }
-                if (target)
-                {
-                    target->undone = false;
-                    target->undoOrder = 0;
-                    SendRedo(*target);
-                }
-            }
-            if (!canRedo) ImGui::EndDisabled();
-
+            ImGui::BeginDisabled(!CanRedo());
+            if (ui::IconButton(u8"redo", ICON_FA_ROTATE_RIGHT, TR(u8"Redo"))) Redo();
+            ImGui::EndDisabled();
             ImGui::SameLine();
-            if (ImGui::Button(TR(u8"Clear")))
+            ImGui::BeginDisabled(entries.empty());
+            if (ui::IconButton(u8"clear", ICON_FA_TRASH, TR(u8"Clear")))
             {
                 std::lock_guard<std::mutex> lock(mtx);
                 entries.clear();
                 undoCounter = 0;
             }
+            ImGui::EndDisabled();
 
-            ImGui::Separator();
-            ImGui::BeginChild(u8"##history_list", ImVec2(0, 0), false);
-
-            if (entries.empty())
+            ImGui::BeginChild(u8"##entries");
+            std::lock_guard<std::mutex> lock(mtx);
+            if (entries.empty()) ui::EmptyState(TR(u8"No actions"));
+            float button = ImGui::GetFrameHeight();
+            for (int i = 0; i < (int)entries.size(); ++i)
             {
-                ImGui::TextDisabled(TR(u8"No actions"));
-            }
-            else
-            {
-                std::vector<Entry*> snapshot;
+                Entry& e = entries[i];
+                ImGui::PushID(i);
+                bool undone = e.undone;
+                if (undone) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted((std::string(IconOf(e)) + u8"  " + e.display).c_str());
+                if (undone) ImGui::PopStyleColor();
+                if (e.isUndoable())
                 {
-                    std::lock_guard<std::mutex> lock(mtx);
-                    for (auto& e : entries)
-                        snapshot.push_back(&e);
-                }
-
-                for (int i = 0; i < (int)snapshot.size(); ++i)
-                {
-                    Entry& e = *snapshot[i];
-                    bool wasUndone = e.undone; // capture BEFORE drawing — must stay consistent for Begin/EndDisabled
-
-                    if (wasUndone)
-                        ImGui::TextDisabled("%s", e.display.c_str());
-                    else
-                        ImGui::TextUnformatted(e.display.c_str());
-
-                    if (e.isUndoable())
+                    ImGui::SameLine(ImGui::GetContentRegionMax().x - button);
+                    if (undone ? ui::IconButton(u8"redo", ICON_FA_ROTATE_RIGHT, TR(u8"Redo")) : ui::IconButton(u8"undo", ICON_FA_ROTATE_LEFT, TR(u8"Undo")))
                     {
-                        ImGui::SameLine();
-                        std::string uid = std::to_string(i);
-
-                        if (wasUndone) ImGui::BeginDisabled();
-                        if (ImGui::SmallButton(("U##" + uid).c_str()))
-                        {
-                            std::lock_guard<std::mutex> lock(mtx);
-                            e.undone = true;
-                            e.undoOrder = ++undoCounter;
-                            SendUndo(e);
-                        }
-                        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                            ImGui::SetTooltip(TR(u8"Undo"));
-                        if (wasUndone) ImGui::EndDisabled();
-
-                        ImGui::SameLine();
-
-                        if (!wasUndone) ImGui::BeginDisabled();
-                        if (ImGui::SmallButton(("R##" + uid).c_str()))
-                        {
-                            std::lock_guard<std::mutex> lock(mtx);
-                            e.undone = false;
-                            e.undoOrder = 0;
-                            SendRedo(e);
-                        }
-                        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                            ImGui::SetTooltip(TR(u8"Redo"));
-                        if (!wasUndone) ImGui::EndDisabled();
+                        e.undone = !undone;
+                        e.undoOrder = undone ? 0 : ++undoCounter;
+                        if (undone) SendRedo(e);
+                        else SendUndo(e);
                     }
                 }
+                ImGui::PopID();
             }
-
             ImGui::EndChild();
         }
-        ImGui::End();
+        ui::EndPanel();
     }
-
 }

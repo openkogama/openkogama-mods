@@ -415,7 +415,6 @@ namespace cubes {
         else if (command == "clipboard_clear_before_paste") clearFirst = on;
         else if (command == "clipboard_save_to_file") Save(value);
         else if (command == "clipboard_load_from_file") Load(value);
-        else if (command == "clipboard_preview_paste_model") {}
         else if (command.rfind("clipboard_mirror_", 0) == 0 && command.size() == 18) mirror[command.back() - 'x'] = on;
         else if (SetAxis(command, "clipboard_offset_", offset, number)) {}
         else if (SetAxis(command, "clipboard_rotation_", rotation, number)) {}

@@ -17,7 +17,9 @@ namespace Explorer {
 
     void LoadFromFile(const std::string& path);
     void SetSelected(const std::string& id);
+    void Select(const std::string& id);
     void SetRootGroupId(int id);
+    int RootGroupId();
     void SetCameraPos(float x, float y, float z);
     void GetCameraPos(float& x, float& y, float& z);
     void Render();
@@ -25,6 +27,8 @@ namespace Explorer {
     const ObjectEntry* FindById(const std::string& id);
     const std::vector<ObjectEntry>& GetAllObjects();
     void DeselectAll();
+    void GroupingWarning();
+    bool Protected(const std::string& type);
 
     extern bool advGroupingWarnSkip;
     extern bool advancedGrouping;

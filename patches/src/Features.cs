@@ -23,6 +23,7 @@ public static class Features
     [
         ("world.object_added", "WorldNetwork", "AddWorldObject"),
         ("world.object_removed", "MVWorldObjectClientManagerNetwork", "DestroyWO"),
+        ("world.object_transferred", "MVGroup", "TransferChild"),
         ("editor.move_character", "MVBuildModeAvatarLocal.EditMode", "MoveCharacter"),
         ("editor.add_prototype", "EditorWorldObjectCreation", "OnAddNewPrototype"),
         ("world.loaded", "WorldNetwork", "HandleDeserializedWorldData"),

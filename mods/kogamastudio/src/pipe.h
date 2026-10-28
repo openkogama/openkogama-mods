@@ -7,7 +7,6 @@ namespace pipe {
 	extern bool cursorVisible;
 	extern bool gameInitialized;
 	extern bool openMenu;
-	extern float generateProgress;
 	extern bool isFullscreen;
 
 	extern bool  isPasteBuilding;
@@ -20,6 +19,6 @@ namespace pipe {
 	extern int   worldLoadTotal;
 	extern float worldLoadEta;
 
-	void ProcessPending();
+	bool ProcessPending();
 	void ProcessCommand(const std::string& cmd);
 }

@@ -21,6 +21,10 @@ jobs:
             unity: 2022.3.43f1
             arch: Win32
             build: kogama-301095-0eb09042-57bc-4932-af97-6ed48e1afc4f
+          - version: 3.0.89
+            unity: 2021.3.14f1
+            arch: Win32
+            build: kogama-300089-7761d252-62f0-4c86-aaf6-d91d4acd112b
           - version: 2.30.13
             unity: 2018.4.32f1
             arch: Win32
@@ -29,10 +33,26 @@ jobs:
             unity: 2018.4.31f1
             arch: Win32
             build: kogama-230006-57eff71c-042d-416b-b01b-b2c2e0c9cce5
+          - version: 2.30.2
+            unity: 2018.3.14f1
+            arch: Win32
+            build: kogama-230002-a29947a9-e304-462f-bc56-11e133c4538f
+          - version: 2.6.11
+            unity: 2018.2.0f2
+            arch: Win32
+            build: kogama-206011-95208d4c-d0ad-4f8a-a842-2d79f4054880
           - version: 1.88.0
             unity: 5.3.8p2
             arch: Win32
             build: kogama-188000-4625ac7c-e84e-4f6b-b594-7ad27c45eace
+          - version: 1.75.3
+            unity: 5.6.4f1
+            arch: Win32
+            build: kogama-175003-6b237e17-95fc-47d3-8ba2-010877881f1c
+          - version: 1.32.7
+            unity: 5.2.4f1
+            arch: Win32
+            build: kogama-132007-3dd6f58e-9ecc-47ec-9ed7-98ee7f7e322e
           - version: 1.25.13
             unity: 5.1.3f1
             arch: Win32

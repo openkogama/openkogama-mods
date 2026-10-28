@@ -50,6 +50,12 @@ public static class X64
                 return new Insn(p - at + 1, false, true);
             case >= 0xB8 and <= 0xBF:
                 return new Insn(p - at + (rexW ? 8 : opsize ? 2 : 4), false, false);
+            case 0x6A:
+                return new Insn(p - at + 1, false, false);
+            case 0x68:
+                return new Insn(p - at + (opsize ? 2 : 4), false, false);
+            case >= 0xA0 and <= 0xA3:
+                return new Insn(p - at + (x86 ? 4 : 8), false, false);
             case 0x88: case 0x89: case 0x8A: case 0x8B:
             case 0x84: case 0x85:
             case 0x30: case 0x31: case 0x32: case 0x33:
@@ -106,7 +112,7 @@ public static class X64
         while (taken < need)
         {
             Insn insn = Decode(code, at + taken, x86);
-            if (insn.Length == 0 || insn.RelBranch || (insn.RipRelative && x86)) return 0;
+            if (insn.Length == 0 || insn.RelBranch) return 0;
             taken += insn.Length;
         }
         return taken;

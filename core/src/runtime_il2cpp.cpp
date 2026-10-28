@@ -219,7 +219,7 @@ void *find_method(void *klass, const char *method, int args, const char *argtype
     auto known = methods.find(key);
     if (known != methods.end()) return known->second;
     void *found = typed ? overload(klass, method, args, argtypes) : il2.class_get_method_from_name(klass, method, args);
-    if (found) methods[key] = found;
+    methods[key] = found;
     return found;
 }
 

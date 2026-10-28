@@ -39,6 +39,7 @@ struct Mono {
     void *(*method_signature)(void *);
     uint32_t (*signature_get_param_count)(void *);
     void *(*signature_get_params)(void *, void **);
+    void *(*signature_get_return_type)(void *);
     void *(*class_from_mono_type)(void *);
     int32_t (*class_is_enum)(void *);
     void *(*class_get_parent)(void *);
@@ -77,6 +78,7 @@ enum : int {
     TypeGeneric = 0x15,
     TypeObject = 0x1c,
     TypeVector = 0x1d,
+    TypeMethodParameter = 0x1e,
 };
 
 constexpr uint32_t FieldStatic = 0x10;
@@ -128,6 +130,7 @@ bool ready() {
             && bind(mono.method_signature, "mono_method_signature")
             && bind(mono.signature_get_param_count, "mono_signature_get_param_count")
             && bind(mono.signature_get_params, "mono_signature_get_params")
+            && bind(mono.signature_get_return_type, "mono_signature_get_return_type")
             && bind(mono.class_from_mono_type, "mono_class_from_mono_type")
             && bind(mono.class_get_parent, "mono_class_get_parent")
             && bind(mono.object_get_virtual_method, "mono_object_get_virtual_method")
@@ -199,16 +202,27 @@ bool accepts(void *parameter, char wanted) {
     }
 }
 
+bool generic(void *signature, int args) {
+    void *returned = mono.signature_get_return_type(signature);
+    if (returned && mono.type_get_type(returned) == TypeMethodParameter) return true;
+    void *parameters = nullptr;
+    for (int i = 0; i < args; i++) {
+        void *parameter = mono.signature_get_params(signature, &parameters);
+        if (parameter && mono.type_get_type(parameter) == TypeMethodParameter) return true;
+    }
+    return false;
+}
+
 void *overload(void *klass, const char *method, int args, const char *argtypes) {
     for (; klass; klass = mono.class_get_parent(klass)) {
         void *iterator = nullptr;
         while (void *candidate = mono.class_get_methods(klass, &iterator)) {
             if (std::strcmp(mono.method_get_name(candidate), method) != 0) continue;
             void *signature = mono.method_signature(candidate);
-            if (!signature || (int)mono.signature_get_param_count(signature) != args) continue;
+            if (!signature || (int)mono.signature_get_param_count(signature) != args || generic(signature, args)) continue;
             void *parameters = nullptr;
             bool fits = true;
-            for (int i = 0; i < args && fits; i++) {
+            for (int i = 0; i < args && fits && argtypes; i++) {
                 void *parameter = mono.signature_get_params(signature, &parameters);
                 fits = parameter && accepts(parameter, argtypes[i]);
             }
@@ -218,11 +232,7 @@ void *overload(void *klass, const char *method, int args, const char *argtypes) 
     return nullptr;
 }
 
-void *named(void *klass, const char *method, int args) {
-    for (; klass; klass = mono.class_get_parent(klass))
-        if (void *found = mono.class_get_method_from_name(klass, method, args)) return found;
-    return nullptr;
-}
+void *named(void *klass, const char *method, int args) { return overload(klass, method, args, nullptr); }
 
 void *virtual_of(ok_object self, void *method) {
     if (!self || !method) return method;
@@ -245,7 +255,7 @@ void *find_method(void *klass, const char *method, int args, const char *argtype
     auto known = methods.find(key);
     if (known != methods.end()) return known->second;
     void *found = typed ? overload(klass, method, args, argtypes) : named(klass, method, args);
-    if (found) methods[key] = found;
+    methods[key] = found;
     return found;
 }
 

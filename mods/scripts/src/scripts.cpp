@@ -22,6 +22,7 @@ namespace {
     std::mutex logLock;
     bool started = false;
     bool loading = false;
+    bool reloading = true;
     Clock::time_point last;
     Clock::time_point watched;
     Clock::time_point loaded;
@@ -58,6 +59,7 @@ namespace {
         }
         if (loading && now - loaded >= std::chrono::milliseconds(500)) {
             loading = false;
+            reloading = false;
             remote::Refresh();
             runtime::Emit("world");
             runtime::Keep("world");
@@ -76,8 +78,13 @@ namespace {
         if (started) api::HoldCursor();
     }
 
-    void OnWorld(ok_call*, void*) {
+    void OnLoading(ok_call*, void*) {
+        reloading = true;
         api::Unblock();
+    }
+
+    void OnWorld(ok_call*, void*) {
+        if (!reloading) return;
         loading = true;
         loaded = Clock::now();
     }
@@ -98,6 +105,7 @@ namespace {
         api::SetSender(remote::Send);
         images::SetSource(remote::Want);
         api->on("frame", OnFrame, nullptr);
+        api->on("loading.start", OnLoading, nullptr);
         api->on("world.loaded", OnWorld, nullptr);
         api->on("frame.late", OnLateFrame, nullptr);
         api->on("app.quit", OnQuit, nullptr);

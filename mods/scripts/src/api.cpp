@@ -978,6 +978,7 @@ namespace api {
 
     void Unblock() {
         blockers.clear();
+        if (!cursorHolders.empty() && cursorWasLocked) game::LockCursor();
         cursorHolders.clear();
     }
 

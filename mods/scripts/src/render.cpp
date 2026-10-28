@@ -1,6 +1,7 @@
 #include "render.h"
 #include "api.h"
 #include "frame.h"
+#include "paint.h"
 #include "runtime.h"
 #include "textures.h"
 #include "imgui.h"
@@ -129,7 +130,7 @@ namespace render {
             return FALSE;
         }
 
-        HWND GameWindow() {
+        HWND FindGame() {
             HWND found = nullptr;
             EnumWindows(Visit, reinterpret_cast<LPARAM>(&found));
             return found;
@@ -526,15 +527,9 @@ namespace render {
         void Paint(IDXGISwapChain* chain) {
             if (quitting || gpu.broken) return;
             if (chain != gpu.chain && (!GameChain(chain) || !Adopt(chain))) return;
-            std::unique_ptr<frame::Frame> next;
-            std::vector<textures::Op> work;
-            {
-                std::lock_guard<std::mutex> guard(exchange);
-                next = std::move(pending);
-                work.swap(uploads);
-            }
-            Apply(work);
-            if (next) gpu.current = std::move(next);
+            Work work = Take();
+            Apply(work.ops);
+            if (work.frame) gpu.current = std::move(work.frame);
             if (!gpu.current || gpu.current->commands.empty() || !CreateTarget(chain)) return;
             Draw(*gpu.current);
             Free(gpu.target);
@@ -627,8 +622,20 @@ namespace render {
         }
     }
 
+    Work Take() {
+        Work work;
+        std::lock_guard<std::mutex> guard(exchange);
+        work.frame = std::move(pending);
+        work.ops.swap(uploads);
+        return work;
+    }
+
+    HWND GameWindow() { return window; }
+
+    bool Quitting() { return quitting; }
+
     bool Start() {
-        window = GameWindow();
+        window = FindGame();
         if (!window) return false;
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -644,6 +651,7 @@ namespace render {
         ImGui_ImplWin32_Init(window);
         previous = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(Procedure)));
         hooked = Hook();
+        if (paint9::Hook()) hooked = true;
         if (!hooked) runtime::Log("could not reach the game's drawing, scripts run without a hud");
         return true;
     }
@@ -672,5 +680,6 @@ namespace render {
         if (window && previous) SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(previous));
         Put(presentTable, PresentSlot, present);
         Put(present1Table, Present1Slot, present1);
+        paint9::Unhook();
     }
 }

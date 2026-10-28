@@ -118,7 +118,7 @@ if(MSVC)
     target_compile_options(scripts_core PUBLIC /utf-8)
 endif()
 
-add_library(scripts SHARED ${SCRIPTS}/src/scripts.cpp ${SCRIPTS}/src/render.cpp ${SCRIPTS}/src/remote.cpp ${IMGUI}/imgui_impl_win32.cpp)
+add_library(scripts SHARED ${SCRIPTS}/src/scripts.cpp ${SCRIPTS}/src/render.cpp ${SCRIPTS}/src/paint9.cpp ${SCRIPTS}/src/remote.cpp ${IMGUI}/imgui_impl_win32.cpp)
 target_link_libraries(scripts PRIVATE scripts_core d3d11 dxgi d3dcompiler dwmapi winhttp bcrypt shell32 user32 gdi32)
 set_target_properties(scripts PROPERTIES PREFIX "" OUTPUT_NAME "scripts")
 

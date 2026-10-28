@@ -138,8 +138,6 @@ bool ready() {
             && bind(mono.class_value_size, "mono_class_value_size")
             && bind(mono.class_is_valuetype, "mono_class_is_valuetype")
             && bind(mono.array_new, "mono_array_new")
-            && bind(mono.string_chars, "mono_string_chars")
-            && bind(mono.string_length, "mono_string_length")
             && bind(mono.class_get_fields, "mono_class_get_fields")
             && bind(mono.field_get_name, "mono_field_get_name")
             && bind(mono.object_new, "mono_object_new")
@@ -149,6 +147,8 @@ bool ready() {
         bind(mono.class_enum_basetype, "mono_class_enum_basetype");
         bind(mono.type_is_byref, "mono_type_is_byref");
         bind(mono.array_element_size, "mono_array_element_size");
+        bind(mono.string_chars, "mono_string_chars");
+        bind(mono.string_length, "mono_string_length");
     }
     void *domain = mono.get_root_domain();
     if (!domain) return false;
@@ -391,8 +391,11 @@ int is_a(ok_object obj, const char *type) {
 
 int string_utf8(ok_object str, char *buf, int cap) {
     if (!str || !ready()) return 0;
-    const wchar_t *chars = reinterpret_cast<const wchar_t *>(mono.string_chars(reinterpret_cast<void *>(str)));
-    int length = mono.string_length(reinterpret_cast<void *>(str));
+    const unsigned char *header = reinterpret_cast<const unsigned char *>(str) + 2 * sizeof(void *);
+    int32_t length = mono.string_length ? mono.string_length(reinterpret_cast<void *>(str)) : load<int32_t>(header);
+    const wchar_t *chars = mono.string_chars ? reinterpret_cast<const wchar_t *>(mono.string_chars(reinterpret_cast<void *>(str)))
+                                             : reinterpret_cast<const wchar_t *>(header + sizeof(int32_t));
+    if (length < 0 || length > (1 << 24)) return 0;
     int needed = WideCharToMultiByte(CP_UTF8, 0, chars, length, nullptr, 0, nullptr, nullptr);
     if (!buf || cap <= 0 || needed <= 0) return needed;
     std::string text(needed, '\0');

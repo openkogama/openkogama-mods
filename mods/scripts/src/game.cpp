@@ -1,5 +1,6 @@
 #include "game.h"
 #include "okmod.h"
+#include "runtime.h"
 #include <string>
 
 namespace game {
@@ -84,11 +85,15 @@ namespace game {
         if (!api) return false;
         int64_t sizes[2] = {2, 2};
         ok_object texture = api->new_object("UnityEngine.Texture2D", 2, sizes, "ii");
-        if (!texture) return false;
+        if (!texture) {
+            runtime::Log("unity made no texture to find the game's device");
+            return false;
+        }
         api->invoke(texture, "UnityEngine.Texture2D", "Apply", 0, nullptr, "", 'v');
         void* native = nullptr;
         ok_object boxed = (ok_object)api->invoke(texture, "UnityEngine.Texture", "GetNativeTexturePtr", 0, nullptr, "", 'o');
         if (boxed) api->unbox(boxed, &native, sizeof(native));
+        if (!native) runtime::Log("unity gave no native texture");
         bool used = native && use(native);
         int64_t argument = (int64_t)texture;
         api->invoke(0, "UnityEngine.Object", "Destroy", 1, &argument, "o", 'v');

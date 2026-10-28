@@ -651,9 +651,11 @@ namespace render {
         api::Style();
         ImGui_ImplWin32_Init(window);
         previous = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(Procedure)));
+        std::string graphics = game::GraphicsVersion();
+        runtime::Log("the game draws with " + (graphics.empty() ? std::string("something unknown") : graphics));
         hooked = Hook();
         if (paint9::Hook()) hooked = true;
-        if (GetModuleHandleW(L"d3d9.dll") && game::GraphicsVersion().rfind("Direct3D 9", 0) == 0 && game::NativeTexture(paint9::Adopt)) hooked = true;
+        if (GetModuleHandleW(L"d3d9.dll") && graphics.rfind("Direct3D 9", 0) == 0 && game::NativeTexture(paint9::Adopt)) hooked = true;
         if (!hooked) runtime::Log("could not reach the game's drawing, scripts run without a hud");
         return true;
     }

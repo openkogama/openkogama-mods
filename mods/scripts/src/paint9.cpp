@@ -2,6 +2,7 @@
 #include "runtime.h"
 #include <d3d9.h>
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -280,6 +281,13 @@ namespace paint9 {
             if (current && !current->commands.empty()) Draw(*current);
         }
 
+        struct Code {
+            unsigned char* start = nullptr;
+            void* original = nullptr;
+        };
+
+        Code presentCode, presentExCode, resetCode, chainCode;
+
         template <typename T> T Original(Hooks& hooks, void* object) {
             void** table = *reinterpret_cast<void***>(object);
             int count = hooks.count.load(std::memory_order_acquire);
@@ -292,9 +300,7 @@ namespace paint9 {
             if (!reached.exchange(true)) runtime::Log("direct3d 9 presents reach the scripts");
         }
 
-        HRESULT STDMETHODCALLTYPE HookedPresent(IDirect3DDevice9* target, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty) {
-            PresentFn original = Original<PresentFn>(presents, target);
-            if (!original) return D3DERR_INVALIDCALL;
+        HRESULT OnPresent(IDirect3DDevice9* target, PresentFn original, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty) {
             Reached();
             if (presenting++ == 0) Paint(target);
             HRESULT result = original(target, source, destination, window, dirty);
@@ -302,9 +308,7 @@ namespace paint9 {
             return result;
         }
 
-        HRESULT STDMETHODCALLTYPE HookedPresentEx(IDirect3DDevice9Ex* target, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty, DWORD flags) {
-            PresentExFn original = Original<PresentExFn>(presentsEx, target);
-            if (!original) return D3DERR_INVALIDCALL;
+        HRESULT OnPresentEx(IDirect3DDevice9Ex* target, PresentExFn original, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty, DWORD flags) {
             Reached();
             if (presenting++ == 0) Paint(target);
             HRESULT result = original(target, source, destination, window, dirty, flags);
@@ -312,9 +316,7 @@ namespace paint9 {
             return result;
         }
 
-        HRESULT STDMETHODCALLTYPE HookedChainPresent(IDirect3DSwapChain9* chain, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty, DWORD flags) {
-            ChainPresentFn original = Original<ChainPresentFn>(chainPresents, chain);
-            if (!original) return D3DERR_INVALIDCALL;
+        HRESULT OnChainPresent(IDirect3DSwapChain9* chain, ChainPresentFn original, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty, DWORD flags) {
             Reached();
             if (presenting++ == 0) {
                 IDirect3DDevice9* owner = nullptr;
@@ -328,11 +330,45 @@ namespace paint9 {
             return result;
         }
 
-        HRESULT STDMETHODCALLTYPE HookedReset(IDirect3DDevice9* target, D3DPRESENT_PARAMETERS* parameters) {
-            ResetFn original = Original<ResetFn>(resets, target);
-            if (!original) return D3DERR_INVALIDCALL;
+        HRESULT OnReset(IDirect3DDevice9* target, ResetFn original, D3DPRESENT_PARAMETERS* parameters) {
             if (target == device) Drop();
             return original(target, parameters);
+        }
+
+        HRESULT STDMETHODCALLTYPE HookedPresent(IDirect3DDevice9* target, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty) {
+            PresentFn original = Original<PresentFn>(presents, target);
+            return original ? OnPresent(target, original, source, destination, window, dirty) : D3DERR_INVALIDCALL;
+        }
+
+        HRESULT STDMETHODCALLTYPE HookedPresentEx(IDirect3DDevice9Ex* target, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty, DWORD flags) {
+            PresentExFn original = Original<PresentExFn>(presentsEx, target);
+            return original ? OnPresentEx(target, original, source, destination, window, dirty, flags) : D3DERR_INVALIDCALL;
+        }
+
+        HRESULT STDMETHODCALLTYPE HookedChainPresent(IDirect3DSwapChain9* chain, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty, DWORD flags) {
+            ChainPresentFn original = Original<ChainPresentFn>(chainPresents, chain);
+            return original ? OnChainPresent(chain, original, source, destination, window, dirty, flags) : D3DERR_INVALIDCALL;
+        }
+
+        HRESULT STDMETHODCALLTYPE HookedReset(IDirect3DDevice9* target, D3DPRESENT_PARAMETERS* parameters) {
+            ResetFn original = Original<ResetFn>(resets, target);
+            return original ? OnReset(target, original, parameters) : D3DERR_INVALIDCALL;
+        }
+
+        HRESULT STDMETHODCALLTYPE PatchedPresent(IDirect3DDevice9* target, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty) {
+            return OnPresent(target, reinterpret_cast<PresentFn>(presentCode.original), source, destination, window, dirty);
+        }
+
+        HRESULT STDMETHODCALLTYPE PatchedPresentEx(IDirect3DDevice9Ex* target, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty, DWORD flags) {
+            return OnPresentEx(target, reinterpret_cast<PresentExFn>(presentExCode.original), source, destination, window, dirty, flags);
+        }
+
+        HRESULT STDMETHODCALLTYPE PatchedChainPresent(IDirect3DSwapChain9* chain, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty, DWORD flags) {
+            return OnChainPresent(chain, reinterpret_cast<ChainPresentFn>(chainCode.original), source, destination, window, dirty, flags);
+        }
+
+        HRESULT STDMETHODCALLTYPE PatchedReset(IDirect3DDevice9* target, D3DPRESENT_PARAMETERS* parameters) {
+            return OnReset(target, reinterpret_cast<ResetFn>(resetCode.original), parameters);
         }
 
         void Swap(void** table, int slot, void* hook, Hooks& hooks) {
@@ -359,6 +395,44 @@ namespace paint9 {
             }
         }
 
+        bool HotPatch(void* function, void* hook, Code& code) {
+#if defined(_M_IX86)
+            unsigned char* start = static_cast<unsigned char*>(function);
+            if (code.start) return code.start == start;
+            if (start[0] != 0x8B || start[1] != 0xFF) return false;
+            for (int i = 1; i <= 5; i++)
+                if (start[-i] != 0xCC && start[-i] != 0x90) return false;
+            DWORD protection = 0;
+            if (!VirtualProtect(start - 5, 7, PAGE_EXECUTE_READWRITE, &protection)) return false;
+            int32_t distance = (int32_t)(static_cast<unsigned char*>(hook) - start);
+            start[-5] = 0xE9;
+            std::memcpy(start - 4, &distance, sizeof(distance));
+            code.original = start + 2;
+            code.start = start;
+            InterlockedExchange16(reinterpret_cast<SHORT volatile*>(start), (SHORT)0xF9EB);
+            VirtualProtect(start - 5, 7, protection, &protection);
+            FlushInstructionCache(GetCurrentProcess(), start - 5, 7);
+            return true;
+#else
+            (void)function;
+            (void)hook;
+            (void)code;
+            return false;
+#endif
+        }
+
+        void Unpatch(Code& code) {
+#if defined(_M_IX86)
+            DWORD protection = 0;
+            if (!code.start || !VirtualProtect(code.start, 2, PAGE_EXECUTE_READWRITE, &protection)) return;
+            InterlockedExchange16(reinterpret_cast<SHORT volatile*>(code.start), (SHORT)0xFF8B);
+            VirtualProtect(code.start, 2, protection, &protection);
+            FlushInstructionCache(GetCurrentProcess(), code.start, 2);
+#else
+            (void)code;
+#endif
+        }
+
         HMODULE ModuleOf(const void* address) {
             HMODULE module = nullptr;
             GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, static_cast<LPCWSTR>(address), &module);
@@ -381,20 +455,34 @@ namespace paint9 {
 
         std::string Describe(IDirect3DDevice9* target) {
             void** slots = *reinterpret_cast<void***>(target);
-            return Where(slots) + " presenting at " + Where(slots[PresentSlot]);
+            return std::string(ModuleOf(slots) ? "a module" : "a heap") + " table presenting at " + Where(slots[PresentSlot]);
+        }
+
+        std::string Patches() {
+            std::string list;
+            const std::pair<const char*, const Code*> codes[] = {{"present", &presentCode}, {"present ex", &presentExCode}, {"reset", &resetCode}, {"swap chain present", &chainCode}};
+            for (const auto& code : codes)
+                if (code.second->start) list += std::string(list.empty() ? "" : ", ") + code.first + " at " + Where(code.second->start);
+            return list.empty() ? "nothing" : list;
+        }
+
+        bool Hooked() {
+            return presentCode.start || presentExCode.start || chainCode.start || presents.count.load() > 0 || chainPresents.count.load() > 0;
+        }
+
+        void Install(void** slots, int slot, void* hooked, void* patched, Code& code, Hooks& hooks, bool anywhere) {
+            if (HotPatch(slots[slot], patched, code)) return;
+            if (anywhere || ModuleOf(slots)) Swap(slots, slot, hooked, hooks);
         }
 
         void Patch(IDirect3DDevice9* target, bool extended, bool anywhere) {
             void** slots = *reinterpret_cast<void***>(target);
-            if (anywhere || ModuleOf(slots)) {
-                Swap(slots, ResetSlot, reinterpret_cast<void*>(&HookedReset), resets);
-                Swap(slots, PresentSlot, reinterpret_cast<void*>(&HookedPresent), presents);
-                if (extended) Swap(slots, PresentExSlot, reinterpret_cast<void*>(&HookedPresentEx), presentsEx);
-            }
+            Install(slots, ResetSlot, reinterpret_cast<void*>(&HookedReset), reinterpret_cast<void*>(&PatchedReset), resetCode, resets, anywhere);
+            Install(slots, PresentSlot, reinterpret_cast<void*>(&HookedPresent), reinterpret_cast<void*>(&PatchedPresent), presentCode, presents, anywhere);
+            if (extended) Install(slots, PresentExSlot, reinterpret_cast<void*>(&HookedPresentEx), reinterpret_cast<void*>(&PatchedPresentEx), presentExCode, presentsEx, anywhere);
             IDirect3DSwapChain9* chain = nullptr;
             if (FAILED(target->GetSwapChain(0, &chain))) return;
-            void** chainSlots = *reinterpret_cast<void***>(chain);
-            if (anywhere || ModuleOf(chainSlots)) Swap(chainSlots, ChainPresentSlot, reinterpret_cast<void*>(&HookedChainPresent), chainPresents);
+            Install(*reinterpret_cast<void***>(chain), ChainPresentSlot, reinterpret_cast<void*>(&HookedChainPresent), reinterpret_cast<void*>(&PatchedChainPresent), chainCode, chainPresents, anywhere);
             chain->Release();
         }
 
@@ -455,10 +543,9 @@ namespace paint9 {
         }
         DestroyWindow(probe);
         UnregisterClassW(type.lpszClassName, type.hInstance);
-        for (const std::string& table : seen) runtime::Log("direct3d 9 probe table " + table);
-        int tables = presents.count.load(), chains = chainPresents.count.load();
-        runtime::Log("direct3d 9 hooks on " + std::to_string(tables) + " device and " + std::to_string(chains) + " swap chain tables");
-        return tables > 0 || chains > 0;
+        for (const std::string& table : seen) runtime::Log("direct3d 9 probes have " + table);
+        runtime::Log("direct3d 9 hooks on " + std::to_string(presents.count.load()) + " device and " + std::to_string(chainPresents.count.load()) + " swap chain tables, code patched for " + Patches());
+        return Hooked();
     }
 
     bool Adopt(void* native) {
@@ -470,14 +557,17 @@ namespace paint9 {
         IDirect3DDevice9* owner = nullptr;
         HRESULT result = texture->GetDevice(&owner);
         texture->Release();
-        if (FAILED(result) || !owner) return false;
+        if (FAILED(result) || !owner) {
+            runtime::Log("the game's direct3d 9 texture has no device");
+            return false;
+        }
         IDirect3DDevice9Ex* extended = nullptr;
         bool ex = SUCCEEDED(owner->QueryInterface(IID_IDirect3DDevice9Ex, reinterpret_cast<void**>(&extended)));
         if (extended) extended->Release();
-        runtime::Log("the game's direct3d 9 device table " + Describe(owner));
+        runtime::Log("the game's direct3d 9 device has " + Describe(owner));
         Patch(owner, ex, true);
         owner->Release();
-        return presents.count.load() > 0;
+        return Hooked();
     }
 
     void Unhook() {
@@ -485,5 +575,6 @@ namespace paint9 {
         Restore(PresentExSlot, presentsEx);
         Restore(ResetSlot, resets);
         Restore(ChainPresentSlot, chainPresents);
+        for (Code* code : {&presentCode, &presentExCode, &resetCode, &chainCode}) Unpatch(*code);
     }
 }

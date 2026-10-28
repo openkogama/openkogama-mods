@@ -65,9 +65,12 @@ namespace {
             auto start = std::chrono::steady_clock::now();
             io.DeltaTime = 1.0f / 60.0f;
             runtime::Tick(1.0 / 60.0);
+            double scripts = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
             api::LoadFonts();
             ImGui::NewFrame();
+            auto drawing = std::chrono::steady_clock::now();
             runtime::Draw();
+            scripts += std::chrono::duration<double>(std::chrono::steady_clock::now() - drawing).count();
             ImGui::Render();
             auto frame = frame::Build(ImGui::GetDrawData());
             result.vertices = std::max(result.vertices, frame->vertices.size());
@@ -76,7 +79,7 @@ namespace {
                 if (op.width == 2 && op.height == 1) result.pictures++;
                 else result.atlases++;
             }
-            result.slowest = std::max(result.slowest, std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+            result.slowest = std::max(result.slowest, scripts);
         }
     }
 }

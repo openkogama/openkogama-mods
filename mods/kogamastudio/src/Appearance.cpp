@@ -8,9 +8,6 @@
 #include <filesystem>
 #include <fstream>
 #include "json.hpp"
-#include <winhttp.h>
-#include <thread>
-#pragma comment(lib, "winhttp.lib")
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
@@ -38,87 +35,6 @@ namespace Appearance {
             else if (selectedTheme == 2) ImGui::StyleColorsClassic();
             ImGui::GetStyle().FrameRounding = rounding;
         }
-    }
-
-    // License key - stored separately from theme config
-    static char licenseKey[128] = "";
-    static bool licenseValid = false;
-    static bool licenseChecked = false;
-    static bool licenseValidating = false;
-
-    static void ValidateLicenseAsync(std::string key) {
-        licenseValidating = true;
-        std::thread([key]() {
-            bool valid = false;
-            HINTERNET hSession = WinHttpOpen(L"KogamaStudio/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
-            if (hSession) {
-                HINTERNET hConnect = WinHttpConnect(hSession, L"qiuchbrbhlkwklmurufr.supabase.co", INTERNET_DEFAULT_HTTPS_PORT, 0);
-                if (hConnect) {
-                    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST",
-                        L"/functions/v1/validate-license",
-                        NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-                    if (hRequest) {
-                        std::string body = "{\"key\":\"" + key + "\"}";
-                        LPCWSTR headers = L"Content-Type: application/json\r\nAuthorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpdWNoYnJiaGxrd2tsbXVydWZyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQyMDg1MzYsImV4cCI6MjA4OTc4NDUzNn0.HAVw8AnS_L5zJP2dc0A0ByL8TmfRhUIkOfzWebzwBoQ";
-
-                        if (WinHttpSendRequest(hRequest, headers, -1,
-                            (LPVOID)body.c_str(), (DWORD)body.size(), (DWORD)body.size(), 0))
-                        {
-                            if (WinHttpReceiveResponse(hRequest, NULL)) {
-                                char buf[1024] = {};
-                                DWORD bytesRead = 0;
-                                WinHttpReadData(hRequest, buf, sizeof(buf) - 1, &bytesRead);
-                                buf[bytesRead] = '\0';
-                                try {
-                                    auto resp = nlohmann::json::parse(buf);
-                                    valid = resp.value("valid", false);
-                                } catch (...) {}
-                            }
-                        }
-                        WinHttpCloseHandle(hRequest);
-                    }
-                    WinHttpCloseHandle(hConnect);
-                }
-                WinHttpCloseHandle(hSession);
-            }
-            licenseValid = valid;
-            licenseChecked = true;
-            licenseValidating = false;
-        }).detach();
-    }
-
-    static std::string GetLicensePath() {
-        char* buffer = nullptr;
-        size_t len;
-        _dupenv_s(&buffer, &len, u8"APPDATA");
-        std::string path = std::string(buffer) + u8"\\..\\Local\\KogamaStudio\\Config\\.license";
-        free(buffer);
-        return path;
-    }
-
-    static void SaveLicense() {
-        std::string path = GetLicensePath();
-        fs::create_directories(fs::path(path).parent_path());
-        std::ofstream file(path, std::ios::binary);
-        // Simple XOR obfuscation so key isn't plaintext on disk
-        std::string key(licenseKey);
-        for (auto& c : key) c ^= 0x5A;
-        file.write(key.data(), key.size());
-    }
-
-    static void LoadLicense() {
-        std::string path = GetLicensePath();
-        if (!fs::exists(path)) return;
-        try {
-            std::ifstream file(path, std::ios::binary);
-            std::string data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            for (auto& c : data) c ^= 0x5A;
-            strncpy(licenseKey, data.c_str(), sizeof(licenseKey) - 1);
-            licenseKey[sizeof(licenseKey) - 1] = '\0';
-            if (strlen(licenseKey) > 0) {
-                ValidateLicenseAsync(licenseKey);
-            }
-        } catch (...) {}
     }
 
     void SaveSettings() {
@@ -181,10 +97,7 @@ namespace Appearance {
             }
             catch (...) {}
         }
-        LoadLicense();
     }
-
-    bool IsExtendedActive() { return licenseValid && licenseChecked; }
 
     namespace {
         void ThemePage() {
@@ -261,31 +174,6 @@ namespace Appearance {
             ImGui::SetItemTooltip(u8"%s", TR(u8"Allow deleting terrain, game options and progression objects."));
             ui::EndProperties();
         }
-
-        void LicensePage() {
-            ui::Hint(TR(u8"Enter your license key to unlock Extended features."));
-            ImGui::Spacing();
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            ImGui::InputTextWithHint(u8"##licenseKey", u8"KSE-XXXX-XXXX-XXXX-...", licenseKey, sizeof(licenseKey));
-            if (!menu::typing) menu::typing = ImGui::IsItemActive();
-            ImGui::Spacing();
-            ImGui::BeginDisabled(licenseValidating);
-            if (ui::Button(TR(u8"Activate"), ui::Tone::Primary)) {
-                if (strlen(licenseKey) > 0) {
-                    SaveLicense();
-                    ValidateLicenseAsync(licenseKey);
-                }
-                else {
-                    licenseChecked = true;
-                    licenseValid = false;
-                }
-            }
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            if (licenseValidating) ImGui::TextDisabled(u8"%s", TR(u8"Validating..."));
-            else if (licenseChecked && licenseValid) ImGui::TextUnformatted(TR(u8"License active"));
-            else if (licenseChecked && strlen(licenseKey) > 0) ImGui::TextUnformatted(TR(u8"Invalid key"));
-        }
     }
 
     void Render() {
@@ -294,7 +182,6 @@ namespace Appearance {
             {ICON_FA_PAINTBRUSH, u8"Appearance", ThemePage},
             {ICON_FA_GLOBE, u8"Language", LanguagePage},
             {ICON_FA_HAMMER, u8"Editing", EditingPage},
-            {ICON_FA_STAR, u8"Extended", LicensePage},
         };
         int count = (int)(sizeof(pages) / sizeof(pages[0]));
         if (settingsTab >= count) settingsTab = 0;

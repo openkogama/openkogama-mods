@@ -74,7 +74,7 @@ target_compile_definitions(kogamastudio PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX
 if(MSVC)
     target_compile_options(kogamastudio PRIVATE /utf-8 /bigobj)
 endif()
-target_link_libraries(kogamastudio PRIVATE d3d11 dxgi dcomp dwmapi d3dcompiler winhttp comdlg32 shell32 ole32 user32 gdi32)
+target_link_libraries(kogamastudio PRIVATE d3d11 dxgi dcomp dwmapi d3dcompiler comdlg32 shell32 ole32 user32 gdi32)
 
 # host test: drives the core with synthetic dispatches, no game needed
 add_executable(okhost_test test/host_test.cpp)

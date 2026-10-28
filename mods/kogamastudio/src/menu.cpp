@@ -40,21 +40,20 @@ namespace menu {
             const char* title;
             void (*render)();
             bool open;
-            bool editOnly;
         };
 
         void RenderConsole() { AppLog::Render(); }
 
         Panel panels[] = {
-            {u8"###Explorer",      u8"Hierarchy",      Explorer::Render,     true,  true},
-            {u8"###Properties",    u8"Inspector",      Properties::Render,   true,  true},
-            {u8"###Tools",         u8"Build",          Tools::Render,        true,  true},
-            {u8"###Inventory",     u8"Assets",         Inventory::Render,    true,  true},
-            {u8"###Clipboard",     u8"Clipboard",      Clipboard::Render,    true,  true},
-            {u8"###History",       u8"History",        History::Render,      true,  true},
-            {u8"###Players",       u8"Players",        Players::Render,      true,  true},
-            {u8"###Blueprints",    u8"Logic",          Blueprints::Render,   true,  true},
-            {u8"###Console",       u8"Console",        RenderConsole,        false, false},
+            {u8"###Explorer",      u8"Hierarchy",      Explorer::Render,     true},
+            {u8"###Properties",    u8"Inspector",      Properties::Render,   true},
+            {u8"###Tools",         u8"Build",          Tools::Render,        true},
+            {u8"###Inventory",     u8"Assets",         Inventory::Render,    true},
+            {u8"###Clipboard",     u8"Clipboard",      Clipboard::Render,    true},
+            {u8"###History",       u8"History",        History::Render,      true},
+            {u8"###Players",       u8"Players",        Players::Render,      true},
+            {u8"###Blueprints",    u8"Logic",          Blueprints::Render,   true},
+            {u8"###Console",       u8"Console",        RenderConsole,        false},
         };
 
         bool layoutReset = false;
@@ -114,8 +113,6 @@ namespace menu {
             captionDrag = ImGui::IsWindowHovered() && !ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive();
         }
 
-        bool Editing() { return GameInfo::gameMode != "Play" || Appearance::IsExtendedActive(); }
-
         void MenuBar() {
             if (!ImGui::BeginMainMenuBar()) return;
             menuBarHeight = ImGui::GetWindowSize().y;
@@ -126,7 +123,7 @@ namespace menu {
             }
             if (ImGui::BeginMenu(TR(u8"View"))) {
                 for (Panel& panel : panels)
-                    ImGui::MenuItem(TR(panel.title), nullptr, &panel.open, Editing() || !panel.editOnly);
+                    ImGui::MenuItem(TR(panel.title), nullptr, &panel.open);
                 ImGui::Separator();
                 if (ImGui::MenuItem(TR(u8"Reset layout"))) layoutReset = true;
                 ImGui::EndMenu();
@@ -243,9 +240,8 @@ namespace menu {
         }
 
         void Panels() {
-            bool editing = Editing();
             for (Panel& panel : panels)
-                if (panel.open && (editing || !panel.editOnly)) panel.render();
+                if (panel.open) panel.render();
         }
 
         void Modals() {

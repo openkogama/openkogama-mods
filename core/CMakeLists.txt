@@ -83,6 +83,10 @@ target_include_directories(okhost_test PRIVATE ${CMAKE_SOURCE_DIR}/../include ${
 enable_testing()
 add_test(NAME host COMMAND okhost_test $<TARGET_FILE_DIR:hello>)
 
+add_library(framerate SHARED test/framerate.c)
+target_include_directories(framerate PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+set_target_properties(framerate PROPERTIES PREFIX "" OUTPUT_NAME "framerate")
+
 # loads a dll by path; proves the patched game pulls in okmod
 if(WIN32)
     add_executable(loadtest test/loadtest.cpp)

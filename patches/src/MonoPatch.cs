@@ -116,7 +116,7 @@ public static class MonoPatch
         try { definition = type.Resolve(); }
         catch (AssemblyResolutionException) { definition = null; }
         if (definition is null) return type.IsValueType ? Kind.Struct : Kind.Object;
-        if (definition.IsEnum) return KindOf(definition.GetEnumUnderlyingType(), out convert);
+        if (definition.IsEnum) return KindOf(definition.Fields.First(field => !field.IsStatic).FieldType, out convert);
         return definition.IsValueType ? Kind.Struct : Kind.Object;
     }
 

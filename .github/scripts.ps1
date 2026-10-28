@@ -73,6 +73,9 @@ function Session([string]$name, [string[]]$load, [switch]$Hud) {
   Shot "$name-world"
 
   if ($Hud) {
+    $log = Join-Path $dir "scripts.log"
+    $ready = (Get-Date).AddSeconds(150)
+    while ((Get-Date) -lt $ready -and -not ((Test-Path $log) -and (Select-String -Path $log -Pattern "\[server:hud\] started" -Quiet))) { Start-Sleep -Seconds 2 }
     $origin = [Input]::Origin($window)
     Notes "$name client origin $($origin.X),$($origin.Y)"
     foreach ($i in 1..2) {

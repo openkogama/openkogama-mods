@@ -7,7 +7,6 @@ public sealed class Il2Cpp
     public const string Game = "Assembly-CSharp.dll";
     public const string Engine = "UnityEngine.CoreModule.dll";
     const uint Sanity = 0xFAB11BAF;
-    const int TypeSize = 88;
     const int ImageSize = 40;
     const int MaxMethods = 1_000_000;
     const int MaxTypes = 4_000_000;
@@ -17,10 +16,11 @@ public sealed class Il2Cpp
     readonly byte[] _metadata;
     readonly ulong _imageBase;
     readonly List<(uint Va, uint Size, uint Raw)> _sections = [];
+    readonly List<(uint Va, uint Size)> _code = [];
     readonly Dictionary<(string Module, string Type, string Method, int Parameters), uint> _rvas = [];
     readonly Dictionary<(string Module, string Type, string Method, int Parameters), string[]> _params = [];
     readonly Dictionary<(string Module, string Type, string Method, int Parameters), bool> _static = [];
-    readonly Dictionary<(string Module, string Type, string Method), List<(uint Token, int[] Types)>> _signatures = [];
+    readonly Dictionary<(string Module, string Type, string Method), List<(int Slot, int[] Types)>> _signatures = [];
     ulong[]? _types;
     bool _typesRead;
     readonly Dictionary<string, ulong[]> _pointers = [];
@@ -30,6 +30,13 @@ public sealed class Il2Cpp
     bool _nested;
     readonly Dictionary<uint, int> _uses = [];
     uint[] _starts = [];
+    readonly Layout? _layout;
+    ulong[]? _methodPointers;
+
+    sealed record Layout(int MethodSize, int ParameterStart, int GenericContainer, int MethodIndex, int Token, int Flags, int ParameterCount,
+        int TypeSize, int MethodStart, int MethodCount, int NestedStart, int NestedCount, int Images);
+
+    int TypeSize => _layout!.TypeSize;
 
     public byte[] Binary { get; }
     public bool Is64Bit { get; }
@@ -40,6 +47,7 @@ public sealed class Il2Cpp
         Binary = binary;
         _metadata = metadata;
         if (BitConverter.ToUInt32(metadata, 0) != Sanity) throw new InvalidDataException("not IL2CPP metadata");
+        _layout = LayoutOf(BitConverter.ToInt32(metadata, 4));
 
         int pe = BitConverter.ToInt32(binary, 0x3C);
         int sections = BitConverter.ToUInt16(binary, pe + 6);
@@ -50,6 +58,7 @@ public sealed class Il2Cpp
         {
             int at = pe + 24 + optional + i * 40;
             _sections.Add((BitConverter.ToUInt32(binary, at + 12), BitConverter.ToUInt32(binary, at + 16), BitConverter.ToUInt32(binary, at + 20)));
+            if ((BitConverter.ToUInt32(binary, at + 36) & 0x20000000) != 0) _code.Add((BitConverter.ToUInt32(binary, at + 12), BitConverter.ToUInt32(binary, at + 8)));
         }
     }
 
@@ -58,14 +67,17 @@ public sealed class Il2Cpp
         foreach (string module in modules)
         {
             if (_pointers.ContainsKey(module)) continue;
-            (Dictionary<(string, string, int), uint> tokens, int count) = Tokens(module);
-            ulong[] pointers = Pointers(module, count);
+            (Dictionary<(string, string, int), int> slots, int count) = Tokens(module);
+            bool shared = _layout!.MethodIndex >= 0;
+            bool counted = shared && _methodPointers is not null;
+            ulong[] pointers = shared ? _methodPointers ??= MethodPointers(MethodPointerCount()) : Pointers(module, count);
             _pointers[module] = pointers;
-            foreach (((string type, string method, int parameters), uint token) in tokens)
+            foreach (((string type, string method, int parameters), int slot) in slots)
             {
-                ulong va = pointers[(token & 0xFFFFFF) - 1];
+                ulong va = slot >= 0 && slot < pointers.Length ? pointers[slot] : 0;
                 if (va != 0) _rvas[(module, type, method, parameters)] = (uint)(va - _imageBase);
             }
+            if (counted) continue;
             foreach (ulong va in pointers.Where(va => va != 0))
                 _uses[(uint)(va - _imageBase)] = _uses.GetValueOrDefault((uint)(va - _imageBase)) + 1;
         }
@@ -81,10 +93,10 @@ public sealed class Il2Cpp
     {
         if (!_signatures.TryGetValue((module, type, method), out var candidates) || !_pointers.TryGetValue(module, out ulong[]? pointers)) return null;
         uint? found = null;
-        foreach ((uint token, int[] types) in candidates)
+        foreach ((int slot, int[] types) in candidates)
         {
             if (types.Length != parameterTypes.Count || !types.Select(TypeName).SequenceEqual(parameterTypes)) continue;
-            ulong va = pointers[(token & 0xFFFFFF) - 1];
+            ulong va = slot >= 0 && slot < pointers.Length ? pointers[slot] : 0;
             if (found is not null || va == 0) return null;
             found = (uint)(va - _imageBase);
         }
@@ -98,8 +110,8 @@ public sealed class Il2Cpp
         if (!_pointers.TryGetValue(module, out ulong[]? pointers)) yield break;
         foreach (((string m, string type, string method), var candidates) in _signatures)
             if (m == module)
-                foreach ((uint token, int[] types) in candidates)
-                    if (pointers[(token & 0xFFFFFF) - 1] is ulong va and not 0)
+                foreach ((int slot, int[] types) in candidates)
+                    if (slot >= 0 && slot < pointers.Length && pointers[slot] is ulong va and not 0)
                         yield return (m, type, method, [.. types.Select(TypeName)], (uint)(va - _imageBase));
     }
     public uint? FindEngine(string type, string method, int parameters) => Find(Engine, type, method, parameters);
@@ -178,53 +190,107 @@ public sealed class Il2Cpp
         throw new InvalidDataException($"rva {rva:X} is outside the file");
     }
 
-    (Dictionary<(string, string, int), uint> Tokens, int Count) Tokens(string module)
+    Layout? LayoutOf(int version)
+    {
+        int Int(int at) => BitConverter.ToInt32(_metadata, at);
+        bool Images(int at)
+        {
+            try { return Int(at + 4) > 0 && Int(at + 4) % ImageSize == 0 && Int(at) > 0 && Int(at) < _metadata.Length && Name(Int(Int(at))).EndsWith(".dll", StringComparison.Ordinal); }
+            catch (ArgumentException) { return false; }
+        }
+        return version switch
+        {
+            24 when Images(176) => new(52, 12, 16, 20, 40, 44, 50, 100, 48, 76, 60, 84, 176),
+            29 => new(32, 12, 16, -1, 20, 24, 30, 88, 36, 64, 48, 72, 168),
+            31 => new(36, 16, 20, -1, 24, 28, 34, 88, 36, 64, 48, 72, 168),
+            _ => null
+        };
+    }
+
+    (Dictionary<(string, string, int), int> Slots, int Count) Tokens(string module)
     {
         int version = BitConverter.ToInt32(_metadata, 4);
-        int methodSize = version switch { 29 => 32, 31 => 36, _ => throw new NotSupportedException($"IL2CPP metadata version {version}") };
+        Layout layout = _layout ?? throw new NotSupportedException($"IL2CPP metadata version {version}");
+        int methodSize = layout.MethodSize;
         int Int(int at) => BitConverter.ToInt32(_metadata, at);
-        int methods = Int(48), images = Int(168);
-        if (Int(52) % methodSize != 0 || Int(164) % TypeSize != 0 || Int(172) % ImageSize != 0)
+        int methods = Int(48), images = Int(layout.Images);
+        if (Int(52) % methodSize != 0 || Int(164) % layout.TypeSize != 0 || Int(layout.Images + 4) % ImageSize != 0)
             throw new NotSupportedException($"IL2CPP metadata version {version} has an unknown layout");
 
         int parameters = Int(88);
-        int parameterStartAt = methodSize - 20;
-        for (int image = images; image < images + Int(172); image += ImageSize)
+        for (int image = images; image < images + Int(layout.Images + 4); image += ImageSize)
         {
             if (Name(Int(image)) != module) continue;
-            var tokens = new Dictionary<(string, string, int), uint>();
+            var slots = new Dictionary<(string, string, int), int>();
             var names = new Dictionary<(string, string, int), string[]>();
             var statics = new Dictionary<(string, string, int), bool>();
             var overloaded = new HashSet<(string, string, int)>();
             int count = 0;
             for (int type = Int(image + 8); type < Int(image + 8) + Int(image + 12); type++)
             {
-                int at = Int(160) + type * TypeSize;
+                int at = Int(160) + type * layout.TypeSize;
                 string typeName = FullName(type);
                 if (_parent.ContainsKey(type)) _nestedTypes.Add((module, typeName));
-                for (int method = Int(at + 36); method < Int(at + 36) + BitConverter.ToUInt16(_metadata, at + 64); method++)
+                for (int method = Int(at + layout.MethodStart); method < Int(at + layout.MethodStart) + BitConverter.ToUInt16(_metadata, at + layout.MethodCount); method++)
                 {
                     int definition = methods + method * methodSize;
-                    uint token = BitConverter.ToUInt32(_metadata, definition + methodSize - 12);
+                    uint token = BitConverter.ToUInt32(_metadata, definition + layout.Token);
                     count = Math.Max(count, (int)(token & 0xFFFFFF));
-                    if (Int(definition + methodSize - 16) != NoGenericContainer) continue;
-                    int parameterCount = BitConverter.ToUInt16(_metadata, definition + methodSize - 2);
+                    if (Int(definition + layout.GenericContainer) != NoGenericContainer) continue;
+                    int slot = layout.MethodIndex >= 0 ? Int(definition + layout.MethodIndex) : (int)(token & 0xFFFFFF) - 1;
+                    int parameterCount = BitConverter.ToUInt16(_metadata, definition + layout.ParameterCount);
                     var key = (typeName, Name(Int(definition)), parameterCount);
-                    int parameterStart = Int(definition + parameterStartAt);
+                    int parameterStart = Int(definition + layout.ParameterStart);
                     if (!_signatures.TryGetValue((module, key.Item1, key.Item2), out var signatures))
                         _signatures[(module, key.Item1, key.Item2)] = signatures = [];
-                    signatures.Add((token, [.. Enumerable.Range(0, parameterCount).Select(i => Int(parameters + (parameterStart + i) * 12 + 8))]));
-                    if (!tokens.TryAdd(key, token)) { overloaded.Add(key); continue; }
+                    signatures.Add((slot, [.. Enumerable.Range(0, parameterCount).Select(i => Int(parameters + (parameterStart + i) * 12 + 8))]));
+                    if (!slots.TryAdd(key, slot)) { overloaded.Add(key); continue; }
                     names[key] = [.. Enumerable.Range(0, parameterCount).Select(i => Name(Int(parameters + (parameterStart + i) * 12)))];
-                    statics[key] = (BitConverter.ToUInt16(_metadata, definition + methodSize - 8) & 0x10) != 0;
+                    statics[key] = (BitConverter.ToUInt16(_metadata, definition + layout.Flags) & 0x10) != 0;
                 }
             }
-            foreach (var key in overloaded) { tokens.Remove(key); names.Remove(key); statics.Remove(key); }
+            foreach (var key in overloaded) { slots.Remove(key); names.Remove(key); statics.Remove(key); }
             foreach (var (key, list) in names) _params[(module, key.Item1, key.Item2, key.Item3)] = list;
             foreach (var (key, value) in statics) _static[(module, key.Item1, key.Item2, key.Item3)] = value;
-            return (tokens, count);
+            return (slots, count);
         }
         throw new InvalidDataException($"GameAssembly.dll has no {module}");
+    }
+
+    int MethodPointerCount()
+    {
+        Layout layout = _layout!;
+        int start = BitConverter.ToInt32(_metadata, 48), size = BitConverter.ToInt32(_metadata, 52);
+        int highest = -1;
+        for (int definition = start; definition + layout.MethodSize <= start + size; definition += layout.MethodSize)
+            highest = Math.Max(highest, BitConverter.ToInt32(_metadata, definition + layout.MethodIndex));
+        return highest + 1;
+    }
+
+    ulong[] MethodPointers(int count)
+    {
+        int size = Is64Bit ? 8 : 4;
+        if (count is <= 0 or > MaxMethods) throw new InvalidDataException($"IL2CPP metadata names {count} method pointers");
+        foreach (int slack in new[] { 0, 4096 })
+            for (int at = 0; at + 2 * size <= Binary.Length; at += size)
+            {
+                long stored = Is64Bit ? BitConverter.ToInt64(Binary, at) : BitConverter.ToInt32(Binary, at);
+                if (stored < count || stored > count + slack) continue;
+                if (TryOffset(Pointer(at + size)) is not int table || table + stored * size > Binary.Length) continue;
+                ulong[] pointers = [.. Enumerable.Range(0, (int)stored).Select(i => Pointer(table + i * size))];
+                int code = pointers.Count(Executable), empty = pointers.Count(va => va == 0);
+                if (code + empty == pointers.Length && code > pointers.Length / 2) return pointers;
+            }
+        throw new InvalidDataException($"GameAssembly.dll has no table of {count} method pointers");
+    }
+
+    bool Executable(ulong va)
+    {
+        if (va < _imageBase) return false;
+        ulong rva = va - _imageBase;
+        foreach ((uint start, uint size) in _code)
+            if (rva >= start && rva < start + size) return true;
+        return false;
     }
 
     string TypeName(int index)
@@ -312,7 +378,7 @@ public sealed class Il2Cpp
         for (int t = 0; t < typeCount; t++)
         {
             int at = typesBase + t * TypeSize;
-            int start = Int(at + 48), count = BitConverter.ToUInt16(_metadata, at + 72);
+            int start = Int(at + _layout!.NestedStart), count = BitConverter.ToUInt16(_metadata, at + _layout.NestedCount);
             if (count == 0 || start < 0) continue;
             for (int k = start; k < start + count && k < nestedCount; k++)
                 _parent[Int(nestedOff + k * 4)] = t;

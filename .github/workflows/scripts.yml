@@ -21,6 +21,10 @@ jobs:
             unity: 2022.3.43f1
             arch: Win32
             build: kogama-301095-0eb09042-57bc-4932-af97-6ed48e1afc4f
+          - version: 2.30.13
+            unity: 2018.4.32f1
+            arch: Win32
+            build: kogama-230013-552bb976-0f5e-40fa-b554-05941351472d
           - version: 2.30.6
             unity: 2018.4.31f1
             arch: Win32

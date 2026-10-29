@@ -843,7 +843,7 @@ namespace api {
         }
 
         void ReleaseCursor(const std::string& script) {
-            if (cursorHolders.erase(script) && cursorHolders.empty() && cursorWasLocked) game::LockCursor();
+            if (cursorHolders.erase(script) && cursorHolders.empty()) game::ReturnCursor(cursorWasLocked);
         }
 
         int InputCursor(lua_State* L) {
@@ -978,7 +978,7 @@ namespace api {
 
     void Unblock() {
         blockers.clear();
-        if (!cursorHolders.empty() && cursorWasLocked) game::LockCursor();
+        if (!cursorHolders.empty()) game::ReturnCursor(cursorWasLocked);
         cursorHolders.clear();
     }
 

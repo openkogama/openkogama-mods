@@ -110,6 +110,23 @@ namespace game {
 
         ok_object CanvasType() { return SystemType("UnityEngine.Canvas, UnityEngine.UIModule"); }
 
+        ok_object OverridingManager() {
+            static int supported = -1;
+            if (supported < 0) {
+                ok_object type = SystemType("LockCursorManager3DMode, Assembly-CSharp");
+                int64_t name = Pointer("UnLockCursorOverride");
+                supported = type && api->invoke(type, "System.Type", "GetProperty", 1, &name, "s", 'o') ? 1 : 0;
+            }
+            if (!supported) return 0;
+            ok_object manager = Call(Controller("get_PlayModeUI"), "DesktopPlayModeController", "get_LockCursorManager");
+            return manager && api->is_a(manager, "LockCursorManager3DMode") ? manager : 0;
+        }
+
+        void Override(ok_object manager, bool on) {
+            int64_t value = on;
+            api->invoke(manager, "LockCursorManager3DMode", "set_UnLockCursorOverride", 1, &value, "i", 'v');
+        }
+
         std::vector<ok_object> Interface(const std::string& type, const char* also) {
             std::vector<ok_object> objects;
             ok_object system = SystemType(type + ", Assembly-CSharp");
@@ -278,11 +295,18 @@ namespace game {
     }
 
     void FreeCursor() {
-        if (api) SetCursor(FreeLock, true);
+        if (!api) return;
+        if (ok_object manager = OverridingManager()) Override(manager, true);
+        else SetCursor(FreeLock, true);
     }
 
-    void LockCursor() {
+    void ReturnCursor(bool wasLocked) {
         if (!api) return;
+        if (ok_object manager = OverridingManager()) {
+            Override(manager, false);
+            return;
+        }
+        if (!wasLocked) return;
         ok_object ui = Controller("get_PlayModeUI");
         ok_object state = api->field_obj(ui, "DesktopPlayModeController", "playModeState");
         bool playing = state && (api->invoke(state, "UnityEngine.GameObject", "get_activeInHierarchy", 0, nullptr, "", 'i') & 0xFF) != 0;

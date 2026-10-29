@@ -31,6 +31,6 @@ namespace game {
     bool Children(const std::string& element, std::vector<std::string>& names);
     bool CursorLocked();
     void FreeCursor();
-    void LockCursor();
+    void ReturnCursor(bool wasLocked);
     void SuppressInput();
 }

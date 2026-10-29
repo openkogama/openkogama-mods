@@ -29,7 +29,19 @@ public static class MonoPatch
         resolver.AddSearchDirectory(Path.GetDirectoryName(Path.GetFullPath(input)));
         using ModuleDefinition module = ModuleDefinition.ReadModule(input, new ReaderParameters { AssemblyResolver = resolver });
         using ModuleDefinition shim = ModuleDefinition.ReadModule(shimPath);
+        List<string> applied = Apply(module, shim, toggles, floats, hooks);
+        if (applied.Count > 0) module.Write(output);
+        return applied;
+    }
 
+    public static List<string> Apply(ModuleDefinition module, ModuleDefinition shim) => Apply(module, shim,
+        [.. Features.Toggles.Select(t => new Toggle(t.Flag, t.Type, t.Method, t.Ret))],
+        [.. Features.Floats.Select(f => new FloatSet(f.Flag, f.Type, f.Method, f.Param, f.Arg, f.Fallback))],
+        [.. Features.Hooks.Select(h => new Hook(h.Event, h.Type, h.Method))]);
+
+    public static List<string> Apply(ModuleDefinition module, ModuleDefinition shim, IReadOnlyList<Toggle> toggles, IReadOnlyList<FloatSet> floats,
+        IReadOnlyList<Hook> hooks)
+    {
         TypeDefinition okmod = shim.GetType("OpenKogama.Mods.OkMod");
         MethodReference flagRef = module.ImportReference(okmod.Methods.First(m => m.Name == "Flag"));
         MethodReference paramRef = module.ImportReference(okmod.Methods.First(m => m.Name == "Param"));
@@ -66,7 +78,6 @@ public static class MonoPatch
             hooked.Add(h.Event);
             applied.Add($"event {h.Event} -> {h.Type}::{h.Method}");
         }
-        if (applied.Count > 0) module.Write(output);
         return applied;
     }
 

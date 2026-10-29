@@ -9,6 +9,7 @@ public static class Fixes
     public const string Tcp = "tcp";
     public const string Teleport = "teleport";
     public const string Mods = "mods";
+    public const string Shim = "OkModShim.dll";
     public static readonly string[] All = [ColossusLaser, WorldSwitch, Tcp, Teleport, Mods];
 
     public static List<string> Apply(string input, string output, IReadOnlyCollection<string> fixes, Action<string> log) =>
@@ -37,10 +38,17 @@ public static class Fixes
 
     static List<string> Managed(string input, string output, IReadOnlyCollection<string> fixes)
     {
+        string folder = Path.GetDirectoryName(Path.GetFullPath(input))!;
         var resolver = new DefaultAssemblyResolver();
-        resolver.AddSearchDirectory(Path.GetDirectoryName(Path.GetFullPath(input)));
+        resolver.AddSearchDirectory(folder);
         using var module = ModuleDefinition.ReadModule(new MemoryStream(File.ReadAllBytes(input)), new ReaderParameters { AssemblyResolver = resolver });
         List<string> applied = Apply(module, fixes);
+        string shimPath = Path.Combine(folder, Shim);
+        if (fixes.Contains(Mods) && File.Exists(shimPath))
+        {
+            using ModuleDefinition shim = ModuleDefinition.ReadModule(shimPath);
+            if (MonoPatch.Apply(module, shim).Count > 0) applied.Add(Mods);
+        }
         if (applied.Count == 0) return applied;
         var fixedAssembly = new MemoryStream();
         module.Write(fixedAssembly);

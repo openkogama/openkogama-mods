@@ -98,7 +98,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: client
-          key: ${{ matrix.build }}
+          key: client-${{ matrix.build }}
       - name: download client ${{ matrix.version }}
         if: steps.client.outputs.cache-hit != 'true'
         shell: pwsh
@@ -110,25 +110,24 @@ jobs:
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
-          $run = "patcher/OpenKogama.Mods.Patcher.csproj"
-          $exe = Get-ChildItem client -Recurse -Filter *.exe | Where-Object { $_.Name -notmatch "crash|handler|UnityCrash" } | Select-Object -First 1
-          $game = Get-ChildItem client -Recurse -Filter GameAssembly.dll | Select-Object -First 1
+          Copy-Item client game -Recurse
+          $exe = Get-ChildItem game -Recurse -Filter *.exe | Where-Object { $_.Name -notmatch "crash|handler|UnityCrash" } | Select-Object -First 1
+          $game = Get-ChildItem game -Recurse -Filter GameAssembly.dll | Select-Object -First 1
           if ($game) {
-            $meta = (Get-ChildItem client -Recurse -Filter global-metadata.dat | Select-Object -First 1).FullName
-            dotnet run --project $run -c Release --no-build -- patch install $game.FullName $meta "$($game.FullName).patched"
-            Move-Item -Force "$($game.FullName).patched" $game.FullName
+            Copy-Item $game.FullName "$($game.FullName).original"
+            dotnet server/openkogama-server.dll client fix "$($game.FullName).original" $game.FullName mods
           } else {
-            $asm = (Get-ChildItem client -Recurse -Filter Assembly-CSharp.dll | Where-Object { $_.FullName -match "Managed" } | Select-Object -First 1).FullName
+            $asm = (Get-ChildItem game -Recurse -Filter Assembly-CSharp.dll | Where-Object { $_.FullName -match "Managed" } | Select-Object -First 1).FullName
             $shim = (Get-ChildItem shim/bin/Release -Recurse -Filter OkModShim.dll | Select-Object -First 1).FullName
-            dotnet run --project $run -c Release --no-build -- patch mono $asm $shim "$asm.patched"
-            Move-Item -Force "$asm.patched" $asm
             Copy-Item $shim (Split-Path $asm)
+            Copy-Item $asm "$asm.original"
+            dotnet server/openkogama-server.dll client fix "$asm.original" $asm mods
           }
           Copy-Item core/build/Release/okmod.dll $exe.DirectoryName
 
       - name: play with and without scripts
         shell: pwsh
-        run: ./.github/scripts.ps1 -Client client -Server server -Mods core/build/Release -Scripts mods/scripts/test/game -Plugins plugins -Out shots -Version ${{ matrix.version }} -Unity ${{ matrix.unity }}
+        run: ./.github/scripts.ps1 -Client game -Server server -Mods core/build/Release -Scripts mods/scripts/test/game -Plugins plugins -Out shots -Version ${{ matrix.version }} -Unity ${{ matrix.unity }}
 
       - uses: actions/upload-artifact@v4
         if: always()

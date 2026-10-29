@@ -1,4 +1,3 @@
-using Mono.Cecil;
 using OpenKogama.Mods.Patches;
 
 const string Game = Il2Cpp.Game;
@@ -40,7 +39,7 @@ Console.WriteLine("       okpatch header <global-metadata.dat>");
 Console.WriteLine("       okpatch params <GameAssembly.dll> <global-metadata.dat> <Type::Method[/N] ...>");
 Console.WriteLine("       okpatch patch loader <GameAssembly.dll> <out>");
 Console.WriteLine($"       okpatch patch fix <GameAssembly.dll> <global-metadata.dat> <out> [{string.Join(" ", Fixes.All[1..^1])}]");
-Console.WriteLine($"       okpatch patch fix <Assembly-CSharp.dll> <out> [{string.Join(" ", Fixes.All[..^1])}]");
+Console.WriteLine($"       okpatch patch fix <Assembly-CSharp.dll> <out> [{string.Join(" ", Fixes.All)}], mods with OkModShim.dll next to it");
 Console.WriteLine("       okpatch patch install <GameAssembly.dll> <global-metadata.dat> <out>");
 Console.WriteLine("       okpatch patch mono <Assembly-CSharp.dll> <OkModShim.dll> <out>");
 Console.WriteLine("       okpatch patch content <data.unity3d or sharedassets0.assets> <content.json> <out>");
@@ -71,15 +70,11 @@ static int ApplyFix(string binary, string metadata, string output, string[] fixe
 
 static int ApplyManagedFix(string assembly, string output, string[] fixes)
 {
-    var resolver = new DefaultAssemblyResolver();
-    resolver.AddSearchDirectory(Path.GetDirectoryName(Path.GetFullPath(assembly)));
     try
     {
-        using var module = ModuleDefinition.ReadModule(new MemoryStream(File.ReadAllBytes(assembly)), new ReaderParameters { AssemblyResolver = resolver });
         foreach (string fix in fixes.Where(fix => !Fixes.All.Contains(fix))) Console.WriteLine($"fix: unknown fix {fix}");
-        List<string> applied = Fixes.Apply(module, fixes);
+        List<string> applied = Fixes.Apply(assembly, output, fixes, line => Console.WriteLine($"fix: {line}"));
         if (applied.Count == 0) { Console.WriteLine("fix: nothing changed"); return 3; }
-        module.Write(output);
         foreach (string fix in applied) Console.WriteLine($"fix: applied {fix}");
         return 0;
     }

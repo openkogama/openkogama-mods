@@ -9,6 +9,7 @@ $Scripts = (Resolve-Path $Scripts).Path
 . (Join-Path $PSScriptRoot "game.ps1")
 
 $F7 = 0x76
+$F4 = 0x73
 $exe = Get-ChildItem $Client -Recurse -Filter *.exe | Where-Object { $_.Name -notmatch "crash|handler|UnityCrash" } | Select-Object -First 1
 $dir = $exe.DirectoryName
 $data = (New-Item -ItemType Directory -Force run).FullName
@@ -34,6 +35,7 @@ Copy-Item $Scripts (Join-Path $data "scripts") -Recurse
 Logo (Join-Path $data "scripts\hud\logo.png")
 New-Item -ItemType Directory -Force (Join-Path $data "plugins") | Out-Null
 Copy-Item (Join-Path $Plugins "online.dll") (Join-Path $data "plugins")
+Copy-Item (Join-Path $Plugins "worldmap.dll") (Join-Path $data "plugins")
 $hosting = Start-Process dotnet -ArgumentList "`"$(Resolve-Path (Join-Path $Server openkogama-server.dll))`"" -WorkingDirectory $data -PassThru -WindowStyle Hidden `
   -RedirectStandardOutput (Join-Path $Out "server.txt") -RedirectStandardError (Join-Path $Out "server-errors.txt")
 Start-Sleep -Seconds 15
@@ -88,6 +90,9 @@ function Session([string]$name, [string[]]$load, [switch]$Hud) {
     Add-Content (Join-Path $data "scripts\hud\main.lua") 'print("server update arrived")'
     Start-Sleep -Seconds 15
     Shot "$name-updated"
+    [Input]::Press($window, $F4)
+    Start-Sleep -Seconds 25
+    Shot "$name-map"
   }
 
   Stop-Process -Id $game.Id -Force -ErrorAction SilentlyContinue
@@ -121,6 +126,7 @@ $checks = [ordered]@{
   "a plugin's script reached the game" = "\[server:online\] started"
   "the server sent the script a message" = "\[server:online\] online: Player"
   "the script asked the server and got an answer" = "\[server:online\] pong after"
+  "the worldmap plugin's script started" = "\[server:worldmap\] started"
 }
 $missing = @()
 $worlds = [regex]::Matches($text, "\[server:hud\] world loaded").Count

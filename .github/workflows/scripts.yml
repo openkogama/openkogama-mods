@@ -85,6 +85,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           dotnet build server-src/openkogama-server.csproj -c Release -o server
           dotnet build server-src/examples/online/online.csproj -c Release -o plugins
+          dotnet build server-src/examples/worldmap/worldmap.csproj -c Release -o plugins
           cmake -S core -B core/build -A ${{ matrix.arch }}
           cmake --build core/build --config Release
           dotnet build patcher/OpenKogama.Mods.Patcher.csproj -c Release

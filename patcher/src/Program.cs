@@ -38,8 +38,8 @@ Console.WriteLine("       okpatch signatures <GameAssembly.dll> <global-metadata
 Console.WriteLine("       okpatch header <global-metadata.dat>");
 Console.WriteLine("       okpatch params <GameAssembly.dll> <global-metadata.dat> <Type::Method[/N] ...>");
 Console.WriteLine("       okpatch patch loader <GameAssembly.dll> <out>");
-Console.WriteLine($"       okpatch patch fix <GameAssembly.dll> <global-metadata.dat> <out> [{string.Join(" ", Fixes.All[1..^1])}]");
-Console.WriteLine($"       okpatch patch fix <Assembly-CSharp.dll> <out> [{string.Join(" ", Fixes.All)}], mods with OkModShim.dll next to it");
+Console.WriteLine($"       okpatch patch fix <GameAssembly.dll> <global-metadata.dat> <out> [{string.Join(" ", new[] { Fixes.WorldSwitch, Fixes.Tcp, Fixes.Teleport })}]");
+Console.WriteLine($"       okpatch patch fix <Assembly-CSharp.dll or a web player .unityweb> <out> [{string.Join(" ", Fixes.All)}], mods with OkModShim.dll next to Assembly-CSharp.dll");
 Console.WriteLine("       okpatch patch install <GameAssembly.dll> <global-metadata.dat> <out>");
 Console.WriteLine("       okpatch patch mono <Assembly-CSharp.dll> <OkModShim.dll> <out>");
 Console.WriteLine("       okpatch patch content <data.unity3d or sharedassets0.assets> <content.json> <out>");

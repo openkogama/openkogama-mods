@@ -35,6 +35,56 @@ public static class UnityArchive
         return reader.CString();
     }
 
+    public static bool IsPlayerStream(ReadOnlySpan<byte> file) =>
+        file.StartsWith(Encoding.ASCII.GetBytes(WebSignature + "\0")) || file.StartsWith(Encoding.ASCII.GetBytes(RawSignature + "\0"));
+
+    // The game stream a web player loads, UnityWeb compressed as one LZMA stream or UnityRaw as it is; both come back in the UnityRaw format.
+    public static (ArchiveFormat Format, List<ArchiveNode> Nodes) ReadPlayerStream(byte[] archive)
+    {
+        var reader = new ByteReader(archive);
+        string signature = reader.CString();
+        if (signature is not (WebSignature or RawSignature)) throw new InvalidDataException("not a web player stream");
+        uint version = reader.BigUInt();
+        string player = reader.CString();
+        string engine = reader.CString();
+        var format = new ArchiveFormat(RawSignature, version, player, engine);
+        if (signature == RawSignature) return (format, ReadRaw(archive, reader, version));
+
+        if (version >= 4) reader.Skip(20);
+        reader.BigUInt();
+        int headerSize = (int)reader.BigUInt();
+        reader.BigUInt();
+        int levels = reader.BigInt();
+        long size = 0;
+        for (int i = 0; i < levels; i++)
+        {
+            reader.BigUInt();
+            size = reader.BigUInt();
+        }
+
+        const int Properties = 5;
+        const int Length = 8;
+        ReadOnlySpan<byte> packed = archive.AsSpan(headerSize);
+        long declared = BinaryPrimitives.ReadInt64LittleEndian(packed[Properties..]);
+        if (declared is > 0 and <= int.MaxValue) size = declared;
+        byte[] data = new byte[size];
+        using (var input = new MemoryStream(packed[(Properties + Length)..].ToArray()))
+        using (Stream lzma = LzmaStream.Create(packed[..Properties].ToArray(), input, input.Length, size, leaveOpen: false))
+            lzma.ReadExactly(data);
+
+        var block = new ByteReader(data);
+        int count = block.BigInt();
+        var nodes = new List<ArchiveNode>(count);
+        for (int i = 0; i < count; i++)
+        {
+            string name = block.CString();
+            int offset = (int)block.BigUInt();
+            int length = (int)block.BigUInt();
+            nodes.Add(new ArchiveNode(name, data.AsSpan(offset, length).ToArray(), name.Contains('.') ? 0 : SerializedFileNode));
+        }
+        return (format, nodes);
+    }
+
     public static (string Engine, List<ArchiveNode> Nodes) Read(byte[] archive)
     {
         (ArchiveFormat format, List<ArchiveNode> nodes) = ReadWithFormat(archive);

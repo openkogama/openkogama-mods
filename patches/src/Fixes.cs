@@ -8,9 +8,11 @@ public static class Fixes
     public const string WorldSwitch = "world-switch";
     public const string Tcp = "tcp";
     public const string Teleport = "teleport";
+    public const string Camera = "camera";
     public const string Mods = "mods";
     public const string Shim = "OkModShim.dll";
-    public static readonly string[] All = [ColossusLaser, WorldSwitch, Tcp, Teleport, Mods];
+    const string GameCode = "Assembly-CSharp.dll";
+    public static readonly string[] All = [ColossusLaser, WorldSwitch, Tcp, Teleport, Camera, Mods];
 
     public static List<string> Apply(string input, string output, IReadOnlyCollection<string> fixes, Action<string> log) =>
         Path.GetFileName(output).Equals("GameAssembly.dll", StringComparison.OrdinalIgnoreCase)
@@ -24,6 +26,7 @@ public static class Fixes
         if (fixes.Contains(WorldSwitch) && WorldSwitchFix.Apply(module)) applied.Add(WorldSwitch);
         if (fixes.Contains(Tcp) && TcpFix.Apply(module)) applied.Add(Tcp);
         if (fixes.Contains(Teleport) && TeleportFix.Apply(module)) applied.Add(Teleport);
+        if (fixes.Contains(Camera) && CameraFix.Apply(module)) applied.Add(Camera);
         return applied;
     }
 
@@ -38,6 +41,8 @@ public static class Fixes
 
     static List<string> Managed(string input, string output, IReadOnlyCollection<string> fixes)
     {
+        byte[] file = File.ReadAllBytes(input);
+        if (UnityArchive.IsPlayerStream(file)) return Stream(file, output, fixes);
         string folder = Path.GetDirectoryName(Path.GetFullPath(input))!;
         var resolver = new DefaultAssemblyResolver();
         resolver.AddSearchDirectory(folder);
@@ -54,6 +59,43 @@ public static class Fixes
         module.Write(fixedAssembly);
         Save(output, fixedAssembly.ToArray());
         return applied;
+    }
+
+    static List<string> Stream(byte[] file, string output, IReadOnlyCollection<string> fixes)
+    {
+        (ArchiveFormat format, List<ArchiveNode> nodes) = UnityArchive.ReadPlayerStream(file);
+        int index = nodes.FindIndex(node => Path.GetFileName(node.Name).Equals(GameCode, StringComparison.OrdinalIgnoreCase));
+        if (index < 0) return [];
+        string folder = Directory.CreateTempSubdirectory("okfix-").FullName;
+        try
+        {
+            foreach (ArchiveNode node in nodes.Where(node => node.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)))
+                File.WriteAllBytes(Path.Combine(folder, Path.GetFileName(node.Name)), node.Data);
+            var resolver = new DefaultAssemblyResolver();
+            resolver.AddSearchDirectory(folder);
+            using var module = ModuleDefinition.ReadModule(new MemoryStream(nodes[index].Data), new ReaderParameters { AssemblyResolver = resolver });
+            List<string> applied = [];
+            foreach (string fix in fixes.Where(fix => fix != Mods))
+            {
+                try
+                {
+                    applied.AddRange(Apply(module, [fix]));
+                }
+                catch (AssemblyResolutionException)
+                {
+                }
+            }
+            if (applied.Count == 0) return applied;
+            var patched = new MemoryStream();
+            module.Write(patched);
+            nodes[index] = nodes[index] with { Data = patched.ToArray() };
+            Save(output, UnityArchive.Write(format, nodes));
+            return applied;
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
     }
 
     static List<string> Native(string input, string output, IReadOnlyCollection<string> fixes, Action<string> log)

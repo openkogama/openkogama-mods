@@ -122,7 +122,7 @@ jobs:
             $shim = (Get-ChildItem shim/bin/Release -Recurse -Filter OkModShim.dll | Select-Object -First 1).FullName
             Copy-Item $shim (Split-Path $asm)
             Copy-Item $asm "$asm.original"
-            dotnet server/openkogama-server.dll client fix "$asm.original" $asm mods
+            dotnet server/openkogama-server.dll client fix "$asm.original" $asm mods camera
           }
           Copy-Item core/build/Release/okmod.dll $exe.DirectoryName
 

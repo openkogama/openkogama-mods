@@ -6,6 +6,8 @@ namespace OpenKogama.Mods.Patches;
 
 public sealed record ArchiveNode(string Name, byte[] Data, uint Flags);
 
+public sealed record PlayerStream(ArchiveFormat Format, List<ArchiveNode> Nodes, uint Download, long[] LevelEnds, long[] Offsets);
+
 public sealed record ArchiveFormat(string Signature, uint Version, string Player, string Engine)
 {
     public static ArchiveFormat Current(string engine) => new(UnityArchive.Signature, UnityArchive.Version, "5.x.x", engine);
@@ -38,8 +40,9 @@ public static class UnityArchive
     public static bool IsPlayerStream(ReadOnlySpan<byte> file) =>
         file.StartsWith(Encoding.ASCII.GetBytes(WebSignature + "\0")) || file.StartsWith(Encoding.ASCII.GetBytes(RawSignature + "\0"));
 
-    // The game stream a web player loads, UnityWeb compressed as one LZMA stream or UnityRaw as it is; both come back in the UnityRaw format.
-    public static (ArchiveFormat Format, List<ArchiveNode> Nodes) ReadPlayerStream(byte[] archive)
+    // The game stream a web player loads: a directory and the files in one block, LZMA compressed as a whole in UnityWeb,
+    // with the end of every level in that block so the player can start before the rest arrives.
+    public static PlayerStream ReadPlayerStream(byte[] archive)
     {
         var reader = new ByteReader(archive);
         string signature = reader.CString();
@@ -47,42 +50,114 @@ public static class UnityArchive
         uint version = reader.BigUInt();
         string player = reader.CString();
         string engine = reader.CString();
-        var format = new ArchiveFormat(RawSignature, version, player, engine);
-        if (signature == RawSignature) return (format, ReadRaw(archive, reader, version));
-
-        if (version >= 4) reader.Skip(20);
+        if (version >= 4) throw new NotSupportedException($"web player stream version {version} is not supported");
         reader.BigUInt();
         int headerSize = (int)reader.BigUInt();
-        reader.BigUInt();
+        uint download = reader.BigUInt();
         int levels = reader.BigInt();
-        long size = 0;
+        var ends = new long[levels];
+        long stored = 0;
         for (int i = 0; i < levels; i++)
         {
-            reader.BigUInt();
-            size = reader.BigUInt();
+            stored = reader.BigUInt();
+            ends[i] = reader.BigUInt();
         }
 
-        const int Properties = 5;
-        const int Length = 8;
-        ReadOnlySpan<byte> packed = archive.AsSpan(headerSize);
-        long declared = BinaryPrimitives.ReadInt64LittleEndian(packed[Properties..]);
-        if (declared is > 0 and <= int.MaxValue) size = declared;
-        byte[] data = new byte[size];
-        using (var input = new MemoryStream(packed[(Properties + Length)..].ToArray()))
-        using (Stream lzma = LzmaStream.Create(packed[..Properties].ToArray(), input, input.Length, size, leaveOpen: false))
-            lzma.ReadExactly(data);
-
+        bool packed = signature == WebSignature;
+        byte[] data = packed ? UnpackAlone(archive.AsSpan(headerSize), ends.Length > 0 ? ends[^1] : 0) : archive.AsSpan(headerSize, (int)stored).ToArray();
         var block = new ByteReader(data);
         int count = block.BigInt();
         var nodes = new List<ArchiveNode>(count);
+        var offsets = new long[count];
         for (int i = 0; i < count; i++)
         {
             string name = block.CString();
-            int offset = (int)block.BigUInt();
+            offsets[i] = block.BigUInt();
             int length = (int)block.BigUInt();
-            nodes.Add(new ArchiveNode(name, data.AsSpan(offset, length).ToArray(), name.Contains('.') ? 0 : SerializedFileNode));
+            nodes.Add(new ArchiveNode(name, data.AsSpan((int)offsets[i], length).ToArray(), name.Contains('.') ? 0 : SerializedFileNode));
         }
-        return (format, nodes);
+        return new PlayerStream(new ArchiveFormat(signature, version, player, engine), nodes, download, ends, offsets);
+    }
+
+    public static byte[] WritePlayerStream(PlayerStream original, IReadOnlyList<ArchiveNode> nodes)
+    {
+        int directorySize = 4 + nodes.Sum(node => Encoding.UTF8.GetByteCount(node.Name) + 1 + 8);
+        using var data = new MemoryStream();
+        WriteUInt(data, (uint)nodes.Count);
+        long offset = directorySize;
+        foreach (ArchiveNode node in nodes)
+        {
+            data.Write(Encoding.UTF8.GetBytes(node.Name + "\0"));
+            WriteUInt(data, (uint)offset);
+            WriteUInt(data, (uint)node.Data.Length);
+            offset += node.Data.Length;
+        }
+        foreach (ArchiveNode node in nodes) data.Write(node.Data);
+        byte[] block = data.ToArray();
+
+        long oldDirectory = original.Offsets.Length > 0 ? original.Offsets.Min() : 4;
+        long[] ends = [.. original.LevelEnds.Select(end => end == original.LevelEnds[^1] ? block.Length : Shifted(end))];
+        long Shifted(long end)
+        {
+            long shift = directorySize - oldDirectory;
+            for (int i = 0; i < original.Nodes.Count && i < nodes.Count; i++)
+                if (original.Offsets[i] < end) shift += nodes[i].Data.Length - original.Nodes[i].Data.Length;
+            return Math.Clamp(end + shift, 0, block.Length);
+        }
+
+        bool packed = original.Format.Signature == WebSignature;
+        byte[] body = packed ? PackAlone(block) : block;
+        byte[] strings = Encoding.ASCII.GetBytes(original.Format.Signature + "\0");
+        byte[] names = Encoding.ASCII.GetBytes(original.Format.Player + "\0" + original.Format.Engine + "\0");
+        int fields = 4 * 4 + 8 * ends.Length + (original.Format.Version >= 2 ? 4 : 0) + (original.Format.Version >= 3 ? 4 : 0);
+        int headerSize = (strings.Length + 4 + names.Length + fields + 3) / 4 * 4;
+        long total = headerSize + body.Length;
+
+        using var archive = new MemoryStream();
+        archive.Write(strings);
+        WriteUInt(archive, original.Format.Version);
+        archive.Write(names);
+        WriteUInt(archive, (uint)total);
+        WriteUInt(archive, (uint)headerSize);
+        WriteUInt(archive, original.Download);
+        WriteUInt(archive, (uint)ends.Length);
+        foreach (long end in ends)
+        {
+            WriteUInt(archive, (uint)(packed ? body.Length : end));
+            WriteUInt(archive, (uint)end);
+        }
+        if (original.Format.Version >= 2) WriteUInt(archive, (uint)total);
+        if (original.Format.Version >= 3) WriteUInt(archive, (uint)directorySize);
+        archive.Write(new byte[headerSize - archive.Length]);
+        archive.Write(body);
+        return archive.ToArray();
+    }
+
+    static byte[] UnpackAlone(ReadOnlySpan<byte> packed, long size)
+    {
+        const int Properties = 5;
+        const int Length = 8;
+        long declared = BinaryPrimitives.ReadInt64LittleEndian(packed[Properties..]);
+        if (declared is > 0 and <= int.MaxValue) size = declared;
+        byte[] data = new byte[size];
+        using var input = new MemoryStream(packed[(Properties + Length)..].ToArray());
+        using Stream lzma = LzmaStream.Create(packed[..Properties].ToArray(), input, input.Length, size, leaveOpen: false);
+        lzma.ReadExactly(data);
+        return data;
+    }
+
+    static byte[] PackAlone(byte[] block)
+    {
+        using var body = new MemoryStream();
+        byte[] properties;
+        using (LzmaStream lzma = LzmaStream.Create(new LzmaEncoderProperties(false, 1 << 23), false, body))
+        {
+            properties = lzma.Properties;
+            lzma.Write(block);
+        }
+        byte[] length = new byte[8];
+        BinaryPrimitives.WriteInt64LittleEndian(length, block.Length);
+        return [.. properties, .. length, .. body.ToArray()];
     }
 
     public static (string Engine, List<ArchiveNode> Nodes) Read(byte[] archive)

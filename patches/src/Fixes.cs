@@ -63,18 +63,19 @@ public static class Fixes
 
     static List<string> Stream(byte[] file, string output, IReadOnlyCollection<string> fixes)
     {
-        (ArchiveFormat format, List<ArchiveNode> nodes) = UnityArchive.ReadPlayerStream(file);
+        PlayerStream stream = UnityArchive.ReadPlayerStream(file);
+        List<ArchiveNode> nodes = [.. stream.Nodes];
         int index = nodes.FindIndex(node => Path.GetFileName(node.Name).Equals(GameCode, StringComparison.OrdinalIgnoreCase));
         if (index < 0) return [];
         string folder = Directory.CreateTempSubdirectory("okfix-").FullName;
+        List<string> applied = [];
         try
         {
             foreach (ArchiveNode node in nodes.Where(node => node.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)))
                 File.WriteAllBytes(Path.Combine(folder, Path.GetFileName(node.Name)), node.Data);
-            var resolver = new DefaultAssemblyResolver();
+            using var resolver = new DefaultAssemblyResolver();
             resolver.AddSearchDirectory(folder);
             using var module = ModuleDefinition.ReadModule(new MemoryStream(nodes[index].Data), new ReaderParameters { AssemblyResolver = resolver });
-            List<string> applied = [];
             foreach (string fix in fixes.Where(fix => fix != Mods))
             {
                 try
@@ -89,12 +90,31 @@ public static class Fixes
             var patched = new MemoryStream();
             module.Write(patched);
             nodes[index] = nodes[index] with { Data = patched.ToArray() };
-            Save(output, UnityArchive.Write(format, nodes));
-            return applied;
         }
         finally
         {
-            Directory.Delete(folder, true);
+            try
+            {
+                Directory.Delete(folder, true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+        if (!Holds(output, nodes[index])) Save(output, UnityArchive.WritePlayerStream(stream, nodes));
+        return applied;
+    }
+
+    static bool Holds(string output, ArchiveNode code)
+    {
+        try
+        {
+            return File.Exists(output) && UnityArchive.ReadPlayerStream(File.ReadAllBytes(output)).Nodes
+                .Any(node => node.Name == code.Name && node.Data.AsSpan().SequenceEqual(code.Data));
+        }
+        catch (Exception error) when (error is InvalidDataException or NotSupportedException or IndexOutOfRangeException or ArgumentException)
+        {
+            return false;
         }
     }
 

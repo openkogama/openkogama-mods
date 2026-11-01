@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -26,6 +27,7 @@ namespace world {
         int planet = -1;
         int pendingSelect = -1;
         int selected = -1;
+        int rescaled = -1;
         bool dirty = false;
         bool loaded = false;
         int settledCount = -1;
@@ -240,6 +242,14 @@ namespace world {
             return api->is_a(wo, "MVCubeModelInstance") ? wo : 0;
         }
 
+        bool PlainModel(ok_object wo) { return wo && api->is_a(wo, "MVCubeModelInstance") && ModelOf(wo) == wo; }
+
+        float Scale(ok_object model) {
+            float value = 0.0f;
+            api->unbox((ok_object)api->invoke(model, "MVCubeModelBase", "get_PrototypeScale", 0, nullptr, "", 'o'), &value, sizeof(value));
+            return value;
+        }
+
         double AngleBetween(const ok_quat& a, const ok_quat& b) {
             double dot = std::fabs((double)a.x * b.x + (double)a.y * b.y + (double)a.z * b.z + (double)a.w * b.w);
             return 2.0 * std::acos(std::min(dot, 1.0)) * Degrees;
@@ -362,10 +372,11 @@ namespace world {
             ok_object cubes = ModelOf(wo);
             bool model = cubes != 0;
             int prototype = model ? (int)Number(cubes, "MVCubeModelBase", "get_Pid") : -1;
+            float scale = PlainModel(wo) ? Scale(cubes) : 0.0f;
             char line[512];
-            std::snprintf(line, sizeof(line), "properties_update|%d|%d|%d|%.4f|%.4f|%.4f|%.3f|%.3f|%.3f|%d|%d|%s",
+            std::snprintf(line, sizeof(line), "properties_update|%d|%d|%d|%.4f|%.4f|%.4f|%.3f|%.3f|%.3f|%d|%d|%s|%.6g",
                 id, ItemId(wo), GroupId(wo), position.x, position.y, position.z, euler.x, euler.y, euler.z,
-                model ? 1 : 0, prototype, TypeName(wo).c_str());
+                model ? 1 : 0, prototype, TypeName(wo).c_str(), scale);
             bridge::ToMenu(line);
         }
 
@@ -676,8 +687,20 @@ namespace world {
             }
         }
 
+        void Rescale(int id, float scale) {
+            ok_object creation = api->field_obj(EditUi(), "DesktopEditModeController", "editorWorldObjectCreation");
+            if (!creation || !PlainModel(Object(id)) || !(scale > 0.0f)) return;
+            int64_t bits = 0;
+            std::memcpy(&bits, &scale, sizeof(scale));
+            int64_t args[] = {id, bits};
+            api->invoke(creation, "EditorWorldObjectCreation", "OnChangePrototypeScale", 2, args, "if", 'v');
+            rescaled = id;
+        }
+
         void Poll() {
             FinishGrouping();
+            if (rescaled >= 0 && rescaled == selected) SendProperties(rescaled);
+            rescaled = -1;
             int now = PlanetId();
             if (now != planet) {
                 planet = now;
@@ -728,6 +751,7 @@ namespace world {
         else if (command == "properties_position") { if (selected >= 0 && Vector3Of(value, vector)) SetPosition(selected, vector); }
         else if (command == "properties_rotation") { if (selected >= 0 && Vector3Of(value, vector)) SetRotation(selected, FromEuler(vector.x, vector.y, vector.z)); }
         else if (command == "properties_remove") { if (selected >= 0) Remove(selected); }
+        else if (command == "properties_scale") { if (selected >= 0) Rescale(selected, (float)std::atof(value.c_str())); }
         else if (command == "explorer_remove") Remove(id);
         else if (command == "recovery_teleport_to_object" || command == "teleport_player") TeleportTo(id);
         else if (command == "object_set_visible") {

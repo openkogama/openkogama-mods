@@ -9,11 +9,6 @@ namespace pipe {
 	extern bool openMenu;
 	extern bool isFullscreen;
 
-	extern bool  isPasteBuilding;
-	extern int   pastePlacedCubes;
-	extern int   pasteTotalCubes;
-	extern float pasteEtaSeconds;
-
 	extern bool  isWorldLoading;
 	extern int   worldLoadPlaced;
 	extern int   worldLoadTotal;

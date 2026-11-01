@@ -17,6 +17,7 @@ namespace Properties {
     extern int itemId;
     extern int groupId;
     extern int prototypeId;
+    extern float modelScale;
     extern std::string objectType;
 
 }

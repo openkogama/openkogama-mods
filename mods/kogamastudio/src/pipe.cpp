@@ -21,11 +21,6 @@ namespace pipe {
     bool openMenu = false;
     bool isFullscreen = false;
 
-    bool  isPasteBuilding  = false;
-    int   pastePlacedCubes = 0;
-    int   pasteTotalCubes  = 0;
-    float pasteEtaSeconds  = -1.0f;
-
     bool  isWorldLoading  = false;
     int   worldLoadPlaced = 0;
     int   worldLoadTotal  = 0;
@@ -72,7 +67,7 @@ namespace pipe {
         }
         else if (command == "properties_update")
         {
-            // format: id|itemId|groupId|posX|posY|posZ|rotX|rotY|rotZ|isModel|protoId|type
+            // format: id|itemId|groupId|posX|posY|posZ|rotX|rotY|rotZ|isModel|protoId|type|scale
             auto tok = [](const std::string& s, int idx) -> std::string {
                 size_t start = 0;
                 for (int i = 0; i < idx; ++i) {
@@ -95,31 +90,12 @@ namespace pipe {
             Properties::isModel        = tok(param, 9) == "1";
             Properties::prototypeId    = std::stoi(tok(param, 10));
             Properties::objectType     = tok(param, 11);
+            Properties::modelScale     = (float)::atof(tok(param, 12).c_str());
             Inventory::ClearSelection();
         }
         else if (command == "clipboard_count")
         {
             Clipboard::cubeCount = param.empty() ? 0 : ::atoi(param.c_str());
-        }
-        else if (command == "clipboard_paste_progress")
-        {
-            size_t sep1 = param.find('|');
-            size_t sep2 = sep1 != std::string::npos ? param.find('|', sep1 + 1) : std::string::npos;
-            if (sep1 != std::string::npos)
-            {
-                pastePlacedCubes = ::atoi(param.substr(0, sep1).c_str());
-                pasteTotalCubes  = ::atoi(param.substr(sep1 + 1, sep2 - sep1 - 1).c_str());
-            }
-            if (sep2 != std::string::npos)
-                pasteEtaSeconds = ::atof(param.substr(sep2 + 1).c_str());
-            isPasteBuilding = true;
-        }
-        else if (command == "clipboard_paste_done")
-        {
-            isPasteBuilding  = false;
-            pastePlacedCubes = 0;
-            pasteTotalCubes  = 0;
-            pasteEtaSeconds  = -1.0f;
         }
         else if (command == "console_log")
         {

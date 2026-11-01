@@ -20,11 +20,14 @@ namespace Properties {
     int itemId = -1;
     int groupId = -1;
     int prototypeId = -1;
+    float modelScale = 0.0f;
     std::string objectType = "";
 
     namespace {
         float movedFrom[3] = {};
         float turnedFrom[3] = {};
+        float scaleInput = 0.0f;
+        std::string scaleOf;
 
         std::string OrDash(int value) { return value >= 0 ? std::to_string(value) : u8"-"; }
 
@@ -109,6 +112,26 @@ namespace Properties {
                 snprintf(command, sizeof(command), "properties_history_rotation|%s|%.3f|%.3f|%.3f|%.3f|%.3f|%.3f", targetObjectId.c_str(),
                     turnedFrom[0], turnedFrom[1], turnedFrom[2], rotationX, rotationY, rotationZ);
                 SendCommand(command);
+            }
+
+            if (modelScale > 0.0f) {
+                if (scaleOf != targetObjectId + u8"|" + std::to_string(modelScale)) {
+                    scaleOf = targetObjectId + u8"|" + std::to_string(modelScale);
+                    scaleInput = modelScale;
+                }
+                ui::Property(TR(u8"Scale"));
+                float apply = ImGui::CalcTextSize(TR(u8"Apply")).x + ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetStyle().ItemSpacing.x;
+                ImGui::SetNextItemWidth(-apply);
+                ImGui::InputFloat(u8"##scale", &scaleInput, 0.0f, 0.0f, "%.6g");
+                if (!typing) typing = ImGui::IsItemActive();
+                ImGui::SameLine();
+                ImGui::BeginDisabled(!(scaleInput > 0.0f) || scaleInput == modelScale);
+                if (ui::Button(TR(u8"Apply"))) {
+                    char command[64];
+                    snprintf(command, sizeof(command), "properties_scale|%.6g", scaleInput);
+                    SendCommand(command);
+                }
+                ImGui::EndDisabled();
             }
             ui::EndProperties();
         }

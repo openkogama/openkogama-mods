@@ -143,7 +143,6 @@ namespace {
         std::string command;
         while (bridge::NextForGame(command)) Handle(command);
         world::Tick();
-        cubes::Tick();
         Report();
     }
 

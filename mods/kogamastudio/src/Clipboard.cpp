@@ -1,7 +1,6 @@
 #include "Clipboard.h"
 #include "Properties.h"
 #include "MenuHelpers.h"
-#include "pipe.h"
 #include "IconsFontAwesome6.h"
 #include "ui.h"
 #include <commdlg.h>
@@ -69,7 +68,7 @@ namespace Clipboard {
             ImGui::BeginDisabled(!model);
             if (ui::IconButton(u8"copy", ICON_FA_COPY, TR(u8"Copy cubes from the selected model"))) SendCommand(u8"clipboard_copy_model");
             ImGui::SameLine();
-            ImGui::BeginDisabled(pipe::isPasteBuilding || cubeCount == 0);
+            ImGui::BeginDisabled(cubeCount == 0);
             if (ui::IconButton(u8"paste", ICON_FA_PASTE, TR(u8"Paste cubes into the selected model"))) SendCommand(u8"clipboard_paste_model");
             ImGui::EndDisabled();
             ImGui::EndDisabled();
@@ -90,22 +89,6 @@ namespace Clipboard {
             ImGui::SameLine();
             if (cubeCount > 0) ImGui::TextDisabled(u8"%d %s", cubeCount, TR(u8"cubes"));
             else ImGui::TextDisabled(u8"%s", TR(u8"Empty"));
-        }
-
-        void Progress() {
-            if (!pipe::isPasteBuilding) return;
-            float progress = pipe::pasteTotalCubes > 0 ? (float)pipe::pastePlacedCubes / (float)pipe::pasteTotalCubes : 0.0f;
-            char overlay[64];
-            snprintf(overlay, sizeof(overlay), "%d / %d", pipe::pastePlacedCubes, pipe::pasteTotalCubes);
-            float cancel = ImGui::CalcTextSize(TR(u8"Cancel")).x + ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetStyle().ItemSpacing.x;
-            ImGui::ProgressBar(progress, ImVec2(-cancel, 0.0f), overlay);
-            ImGui::SameLine();
-            if (ui::Button(TR(u8"Cancel"), ui::Tone::Danger)) SendCommand(u8"clipboard_paste_cancel");
-            if (pipe::pasteEtaSeconds >= 0.0f) {
-                int left = (int)pipe::pasteEtaSeconds;
-                if (left >= 60) ui::Hint((std::string(TR(u8"Time left:")) + u8" " + std::to_string(left / 60) + u8"m " + std::to_string(left % 60) + u8"s").c_str());
-                else ui::Hint((std::string(TR(u8"Time left:")) + u8" " + std::to_string(left) + u8"s").c_str());
-            }
         }
 
         void Transform() {
@@ -153,7 +136,6 @@ namespace Clipboard {
     void Render() {
         if (ui::BeginPanel(u8"Clipboard", ICON_FA_PASTE, TR(u8"Clipboard"), nullptr)) {
             Toolbar(Properties::isModel && Properties::targetObjectId != u8"-1");
-            Progress();
             ImGui::Spacing();
             Transform();
         }

@@ -5,7 +5,6 @@
 #include "json.hpp"
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstring>
 #include <fstream>
 #include <tuple>
@@ -14,11 +13,8 @@
 
 namespace cubes {
     namespace {
-        using Clock = std::chrono::steady_clock;
         using json = nlohmann::json;
 
-        constexpr size_t BatchSize = 500;
-        constexpr double BatchPause = 500.0 / 60.0;
         constexpr char Magic[4] = {'K', 'S', 'C', 'B'};
         constexpr char FileVersion = 1;
         constexpr int Axes = 3;
@@ -37,16 +33,6 @@ namespace cubes {
 
         struct Corner { int x, y, z; };
 
-        struct Paste {
-            std::vector<Position> removes;
-            std::vector<Cube> adds;
-            size_t done = 0;
-            int target = -1;
-            bool active = false;
-            int reported = -1;
-            Clock::time_point resumeAt = Clock::now();
-        };
-
         const OkMod* api = nullptr;
         std::vector<Cube> clipboard;
         int offset[Axes] = {};
@@ -55,7 +41,6 @@ namespace cubes {
         int clipHigh[Axes] = {};
         bool mirror[Axes] = {};
         bool clearFirst = false;
-        Paste paste;
 
         int64_t Pointer(const void* value) { return (int64_t)(uintptr_t)value; }
 
@@ -232,58 +217,13 @@ namespace cubes {
             api->invoke(model, "MVCubeModelBase", "AddCube", 2, args, "po", 'v');
         }
 
-        void Finish() {
-            paste.active = false;
-            paste.adds.clear();
-            paste.removes.clear();
-            bridge::ToMenu("clipboard_paste_done");
-        }
-
-        void Report(size_t total) {
-            if ((int)paste.done == paste.reported) return;
-            paste.reported = (int)paste.done;
-            size_t batches = (total - paste.done + BatchSize - 1) / BatchSize;
-            char line[128];
-            std::snprintf(line, sizeof(line), "clipboard_paste_progress|%d|%d|%.1f", (int)paste.done, (int)total, batches * BatchPause);
-            bridge::ToMenu(line);
-        }
-
-        void StartPaste() {
-            if (paste.active || clipboard.empty()) return;
-            int target = world::SelectedId();
-            ok_object model = world::ModelById(target);
-            if (!model) return;
-            paste = Paste{};
-            paste.target = target;
-            paste.adds = Transformed();
+        void Paste() {
+            ok_object model = world::SelectedModel();
+            if (!model || clipboard.empty()) return;
             if (clearFirst)
-                for (const Cube& cube : Read(model)) paste.removes.push_back(At(cube.x, cube.y, cube.z));
-            paste.active = true;
-        }
-
-        void Step() {
-            if (!paste.active || Clock::now() < paste.resumeAt) return;
-            ok_object model = world::ModelById(paste.target);
-            if (!model || (api->call_static_i("MVGameControllerBase", "get_IsPlaying") & 0xFF)) {
-                Finish();
-                return;
-            }
-            size_t total = paste.removes.size() + paste.adds.size();
-            size_t end = std::min(total, paste.done + BatchSize);
-            for (; paste.done < end; paste.done++) {
-                if (paste.done < paste.removes.size()) Remove(model, paste.removes[paste.done]);
-                else Add(model, paste.adds[paste.done - paste.removes.size()]);
-            }
+                for (const Cube& cube : Read(model)) Remove(model, At(cube.x, cube.y, cube.z));
+            for (const Cube& cube : Transformed()) Add(model, cube);
             api->invoke(model, "MVCubeModelBase", "HandleDelta", 0, nullptr, "", 'v');
-            Report(total);
-            if (paste.done >= total) Finish();
-            else paste.resumeAt = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(BatchPause));
-        }
-
-        void Cancel() {
-            if (!paste.active) return;
-            if (ok_object model = world::ModelById(paste.target)) api->invoke(model, "MVCubeModelBase", "HandleDelta", 0, nullptr, "", 'v');
-            Finish();
         }
 
         bool Rooted(const std::string& path) {
@@ -410,8 +350,7 @@ namespace cubes {
             clipboard.clear();
             SendCount();
         }
-        else if (command == "clipboard_paste_model") StartPaste();
-        else if (command == "clipboard_paste_cancel") Cancel();
+        else if (command == "clipboard_paste_model") Paste();
         else if (command == "clipboard_clear_before_paste") clearFirst = on;
         else if (command == "clipboard_save_to_file") Save(value);
         else if (command == "clipboard_load_from_file") Load(value);
@@ -423,6 +362,4 @@ namespace cubes {
         else return false;
         return true;
     }
-
-    void Tick() { Step(); }
 }

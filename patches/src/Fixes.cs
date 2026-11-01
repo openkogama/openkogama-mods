@@ -10,9 +10,10 @@ public static class Fixes
     public const string Teleport = "teleport";
     public const string Camera = "camera";
     public const string Mods = "mods";
+    public const string BuilderTool = "builder-tool";
     public const string Shim = "OkModShim.dll";
     const string GameCode = "Assembly-CSharp.dll";
-    public static readonly string[] All = [ColossusLaser, WorldSwitch, Tcp, Teleport, Camera, Mods];
+    public static readonly string[] All = [ColossusLaser, WorldSwitch, Tcp, Teleport, Camera, Mods, BuilderTool];
 
     public static List<string> Apply(string input, string output, IReadOnlyCollection<string> fixes, Action<string> log) =>
         Path.GetFileName(output).Equals("GameAssembly.dll", StringComparison.OrdinalIgnoreCase)
@@ -27,6 +28,7 @@ public static class Fixes
         if (fixes.Contains(Tcp) && TcpFix.Apply(module)) applied.Add(Tcp);
         if (fixes.Contains(Teleport) && TeleportFix.Apply(module)) applied.Add(Teleport);
         if (fixes.Contains(Camera) && CameraFix.Apply(module)) applied.Add(Camera);
+        if (fixes.Contains(BuilderTool) && BuilderToolFix.Apply(module)) applied.Add(BuilderTool);
         return applied;
     }
 
@@ -36,6 +38,7 @@ public static class Fixes
         if (fixes.Contains(WorldSwitch) && WorldSwitchFix.Apply(il2cpp)) applied.Add(WorldSwitch);
         if (fixes.Contains(Tcp) && TcpFix.Apply(il2cpp, log)) applied.Add(Tcp);
         if (fixes.Contains(Teleport) && TeleportFix.Apply(il2cpp, log)) applied.Add(Teleport);
+        if (fixes.Contains(BuilderTool) && BuilderToolFix.Apply(il2cpp, log)) applied.Add(BuilderTool);
         return applied;
     }
 
@@ -120,7 +123,7 @@ public static class Fixes
 
     static List<string> Native(string input, string output, IReadOnlyCollection<string> fixes, Action<string> log)
     {
-        if (!fixes.Any(fix => fix is WorldSwitch or Tcp or Teleport or Mods) || Metadata(output) is not string metadata) return [];
+        if (!fixes.Any(fix => fix is WorldSwitch or Tcp or Teleport or Mods or BuilderTool) || Metadata(output) is not string metadata) return [];
         Il2Cpp il2cpp;
         try
         {

@@ -8,6 +8,7 @@ struct OkMod;
 namespace game {
     void Attach(const OkMod* host);
     bool PlayerPosition(float* value);
+    bool PlayerHealth(float& health, float& most);
     std::string PlayerName();
     bool CameraPosition(float* value);
     std::string GraphicsVersion();
@@ -28,6 +29,12 @@ namespace game {
     std::vector<Part> Parts(const std::string& element);
     void Hide(const std::string& element, std::map<int, Saved>& saved);
     void Restore(const std::string& element, const std::map<int, Saved>& saved);
+    bool Click(const std::string& element);
+    bool Fullscreen();
+    void SetFullscreen(bool on);
+    bool Muted();
+    void SetMuted(bool on);
+    bool Texts(const std::string& element, std::vector<std::string>& texts);
     bool Children(const std::string& element, std::vector<std::string>& names);
     bool CursorLocked();
     void FreeCursor();

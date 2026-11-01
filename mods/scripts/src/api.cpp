@@ -733,6 +733,14 @@ namespace api {
             return PushVector(L, game::PlayerPosition(value), value);
         }
 
+        int PlayerHealth(lua_State* L) {
+            float health = 0, most = 0;
+            if (!game::PlayerHealth(health, most)) return 0;
+            lua_pushnumber(L, health);
+            lua_pushnumber(L, most);
+            return 2;
+        }
+
         int PlayerName(lua_State* L) {
             std::string name = game::PlayerName();
             if (name.empty()) return 0;
@@ -876,6 +884,37 @@ namespace api {
             return 1;
         }
 
+        int InterfaceClick(lua_State* L) {
+            lua_pushboolean(L, game::Click(Element(L, 1)));
+            return 1;
+        }
+
+        int ScreenFullscreen(lua_State* L) {
+            if (!lua_isnoneornil(L, 1)) game::SetFullscreen(lua_toboolean(L, 1));
+            lua_pushboolean(L, game::Fullscreen());
+            return 1;
+        }
+
+        int SoundMuted(lua_State* L) {
+            if (!lua_isnoneornil(L, 1)) game::SetMuted(lua_toboolean(L, 1));
+            lua_pushboolean(L, game::Muted());
+            return 1;
+        }
+
+        int InterfaceText(lua_State* L) {
+            std::vector<std::string> texts;
+            if (!game::Texts(Element(L, 1), texts)) {
+                lua_pushnil(L);
+                return 1;
+            }
+            lua_createtable(L, (int)texts.size(), 0);
+            for (size_t i = 0; i < texts.size(); i++) {
+                lua_pushlstring(L, texts[i].data(), texts[i].size());
+                lua_rawseti(L, -2, (lua_Integer)i + 1);
+            }
+            return 1;
+        }
+
         int HudList(lua_State* L) {
             std::vector<std::string> names;
             if (!game::Children(Element(L, 1), names)) {
@@ -915,12 +954,13 @@ namespace api {
             {"slider", UiSlider}, {"input", UiInput}, {"progress", UiProgress}, {"image", UiImage},
             {"separator", UiSeparator}, {"sameline", UiSameLine}, {"spacing", UiSpacing}, {nullptr, nullptr},
         };
-        static const luaL_Reg screen[] = {{"size", ScreenSize}, {nullptr, nullptr}};
+        static const luaL_Reg screen[] = {{"size", ScreenSize}, {"fullscreen", ScreenFullscreen}, {nullptr, nullptr}};
+        static const luaL_Reg sound[] = {{"muted", SoundMuted}, {nullptr, nullptr}};
         static const luaL_Reg input[] = {{"down", InputDown}, {"mouse", InputMouse}, {"locked", InputLocked}, {"block", InputBlock}, {"cursor", InputCursor}, {"wheel", InputWheel}, {"consume", InputConsume}, {nullptr, nullptr}};
-        static const luaL_Reg player[] = {{"position", PlayerPosition}, {"name", PlayerName}, {nullptr, nullptr}};
+        static const luaL_Reg player[] = {{"position", PlayerPosition}, {"name", PlayerName}, {"health", PlayerHealth}, {nullptr, nullptr}};
         static const luaL_Reg camera[] = {{"position", CameraPosition}, {nullptr, nullptr}};
         static const luaL_Reg server[] = {{"send", ServerSend}, {"file", ServerFile}, {nullptr, nullptr}};
-        static const luaL_Reg hud[] = {{"hide", HudHide}, {"show", HudShow}, {"shown", HudShown}, {"active", HudActive}, {"list", HudList}, {nullptr, nullptr}};
+        static const luaL_Reg hud[] = {{"hide", HudHide}, {"show", HudShow}, {"shown", HudShown}, {"active", HudActive}, {"list", HudList}, {"text", InterfaceText}, {"click", InterfaceClick}, {nullptr, nullptr}};
         Library(L, "draw", draw);
         Library(L, "ui", ui);
         Library(L, "screen", screen);
@@ -929,6 +969,7 @@ namespace api {
         Library(L, "camera", camera);
         Library(L, "server", server);
         Library(L, "hud", hud);
+        Library(L, "sound", sound);
         lua_pushcfunction(L, Rgb);
         lua_setglobal(L, "rgb");
     }

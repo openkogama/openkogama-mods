@@ -2,6 +2,8 @@
 #include "okmod.h"
 #include "runtime.h"
 #include <cctype>
+#include <map>
+#include <set>
 #include <string>
 
 namespace game {
@@ -104,8 +106,13 @@ namespace game {
         constexpr int64_t ByInstance = 1;
 
         ok_object SystemType(const std::string& qualified) {
+            static std::map<std::string, ok_object> known;
+            auto found = known.find(qualified);
+            if (found != known.end() && found->second) return found->second;
             int64_t name = Pointer(qualified.c_str());
-            return (ok_object)api->invoke(0, "System.Type", "GetType", 1, &name, "s", 'o');
+            ok_object type = (ok_object)api->invoke(0, "System.Type", "GetType", 1, &name, "s", 'o');
+            known[qualified] = type;
+            return type;
         }
 
         ok_object CanvasType() { return SystemType("UnityEngine.Canvas, UnityEngine.UIModule"); }
@@ -132,16 +139,23 @@ namespace game {
             ok_object system = SystemType(type + ", Assembly-CSharp");
             ok_object canvas = CanvasType();
             if (!system || !canvas) return objects;
-            int64_t search[] = {(int64_t)system, IncludeInactive, ByInstance};
-            ok_object found = (ok_object)api->invoke(0, "UnityEngine.Object", "FindObjectsByType", 3, search, "oii", 'o');
-            const ok_object* components = (const ok_object*)api->array_data(found);
-            int count = api->array_length(found);
-            int64_t parent[] = {(int64_t)canvas, IncludeInactive};
-            for (int i = 0; components && i < count; i++) {
-                if (!api->invoke(components[i], "UnityEngine.Component", "GetComponentInParent", 2, parent, "oi", 'o')) continue;
-                if (ok_object object = Call(components[i], "UnityEngine.Component", "get_gameObject")) objects.push_back(object);
-                ok_object extra = also ? api->field_obj(components[i], type.c_str(), also) : 0;
-                if (extra && api->is_a(extra, "UnityEngine.GameObject")) objects.push_back(extra);
+            int64_t search[] = {(int64_t)canvas, IncludeInactive, ByInstance};
+            ok_object canvases = (ok_object)api->invoke(0, "UnityEngine.Object", "FindObjectsByType", 3, search, "oii", 'o');
+            const ok_object* roots = (const ok_object*)api->array_data(canvases);
+            int count = api->array_length(canvases);
+            int64_t children[] = {(int64_t)system, 1, 1, IncludeInactive, 0, 0};
+            std::set<ok_object> seen;
+            for (int c = 0; roots && c < count; c++) {
+                ok_object root = Call(roots[c], "UnityEngine.Component", "get_gameObject");
+                ok_object found = root ? (ok_object)api->invoke(root, "UnityEngine.GameObject", "GetComponentsInternal", 6, children, "oiiiio", 'o') : 0;
+                const ok_object* components = (const ok_object*)api->array_data(found);
+                int total = api->array_length(found);
+                for (int i = 0; components && i < total; i++) {
+                    if (!seen.insert(components[i]).second) continue;
+                    if (ok_object object = Call(components[i], "UnityEngine.Component", "get_gameObject")) objects.push_back(object);
+                    ok_object extra = also ? api->field_obj(components[i], type.c_str(), also) : 0;
+                    if (extra && api->is_a(extra, "UnityEngine.GameObject")) objects.push_back(extra);
+                }
             }
             return objects;
         }
@@ -215,6 +229,20 @@ namespace game {
         ok_object avatar = Call(manager, "MVWorldObjectClientManager", "get_AvatarLocal");
         if (!avatar) avatar = api->call_static_obj("GameDB", "get_LocalAvatar");
         return Position(avatar, value);
+    }
+
+    bool PlayerHealth(float& health, float& most) {
+        if (!api) return false;
+        ok_object mediator = api->call_static_obj("MVGameControllerBase", "get_SpawnRoleDataMediatorLocal");
+        auto variable = [&](const char* name) {
+            ok_object field = mediator ? api->field_obj(mediator, nullptr, name) : 0;
+            return field ? api->field_obj(field, nullptr, "subscribableVariable") : 0;
+        };
+        ok_object current = variable("health"), limit = variable("maxHealth");
+        if (!current || !limit) return false;
+        health = (float)api->field_num(current, nullptr, "value", 0);
+        most = (float)api->field_num(limit, nullptr, "value", 0);
+        return most > 0;
     }
 
     std::string PlayerName() {
@@ -317,6 +345,73 @@ namespace game {
         if (!api) return;
         api->invoke(0, "MVInputWrapper", "SuppressAllInput", 0, nullptr, "", 'v');
         api->invoke(0, "MVInputWrapper", "SuppressInGameInput", 0, nullptr, "", 'v');
+    }
+
+    bool Click(const std::string& element) {
+        if (!api) return false;
+        ok_object type = SystemType("UnityEngine.UI.Button, UnityEngine.UI");
+        if (!type) return false;
+        int64_t search[] = {(int64_t)type, 1, 1, 0, 0, 0};
+        bool clicked = false;
+        for (ok_object object : Elements(element)) {
+            ok_object found = (ok_object)api->invoke(object, "UnityEngine.GameObject", "GetComponentsInternal", 6, search, "oiiiio", 'o');
+            const ok_object* buttons = (const ok_object*)api->array_data(found);
+            if (!buttons || api->array_length(found) == 0) continue;
+            ok_object click = Call(buttons[0], "UnityEngine.UI.Button", "get_onClick");
+            if (!click) continue;
+            api->invoke(click, "UnityEngine.Events.UnityEvent", "Invoke", 0, nullptr, "", 'v');
+            clicked = true;
+        }
+        return clicked;
+    }
+
+    bool Fullscreen() { return api && (api->call_static_i("UnityEngine.Screen", "get_fullScreen") & 0xFF) != 0; }
+
+    void SetFullscreen(bool on) {
+        static int64_t windowed[2] = {0, 0};
+        if (!api || on == Fullscreen()) return;
+        int64_t size[3] = {0, 0, on};
+        if (on) {
+            windowed[0] = api->call_static_i("UnityEngine.Screen", "get_width");
+            windowed[1] = api->call_static_i("UnityEngine.Screen", "get_height");
+            int32_t monitor[8] = {};
+            api->unbox((ok_object)api->invoke(0, "UnityEngine.Screen", "get_currentResolution", 0, nullptr, "", 'o'), monitor, sizeof(monitor));
+            size[0] = monitor[0];
+            size[1] = monitor[1];
+        } else {
+            size[0] = windowed[0];
+            size[1] = windowed[1];
+        }
+        if (size[0] > 0 && size[1] > 0) api->invoke(0, "UnityEngine.Screen", "SetResolution", 3, size, "iii", 'v');
+        else api->invoke(0, "UnityEngine.Screen", "set_fullScreen", 1, &size[2], "i", 'v');
+    }
+
+    bool Muted() { return api && (api->call_static_i("MainCameraManager", "get_Mute") & 0xFF) != 0; }
+
+    void SetMuted(bool on) {
+        int64_t value = on;
+        if (api) api->invoke(0, "MainCameraManager", "set_Mute", 1, &value, "i", 'v');
+    }
+
+    bool Texts(const std::string& element, std::vector<std::string>& texts) {
+        if (!api) return false;
+        std::vector<ok_object> objects = Elements(element);
+        ok_object type = SystemType("UnityEngine.UI.Text, UnityEngine.UI");
+        if (objects.empty() || !type) return false;
+        int64_t search[] = {(int64_t)type, 1, 1, 0, 0, 0};
+        std::set<ok_object> seen;
+        for (ok_object object : objects) {
+            ok_object found = (ok_object)api->invoke(object, "UnityEngine.GameObject", "GetComponentsInternal", 6, search, "oiiiio", 'o');
+            const ok_object* components = (const ok_object*)api->array_data(found);
+            int count = api->array_length(found);
+            for (int i = 0; components && i < count; i++) {
+                if (!seen.insert(components[i]).second) continue;
+                char text[256] = {};
+                api->string_utf8(Call(components[i], "UnityEngine.UI.Text", "get_text"), text, sizeof(text));
+                texts.push_back(text);
+            }
+        }
+        return true;
     }
 
     bool Children(const std::string& element, std::vector<std::string>& names) {

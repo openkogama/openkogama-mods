@@ -293,13 +293,17 @@ int run_gate(const char *hook) {
 int run_event(const char *hook, int64_t *args, int argc, int64_t *result) {
     ok_call *c = call_begin();
     int stacked = args && argc == RegisterSlots ? StackSlots : 0;
+    int64_t pushed[StackSlots] = {};
     for (int i = 0; i < argc; i++) call_push_int(c, args ? args[i] : 0);
-    for (int i = 0; i < stacked; i++) call_push_int(c, args[StackStart + i]);
+    for (int i = 0; i < stacked; i++) {
+        pushed[i] = args[StackStart + i];
+        call_push_int(c, pushed[i]);
+    }
     dispatch(hook, c);
     for (int i = 0; i < argc && args; i++) args[i] = call_arg_int(c, i);
     for (int i = 0; i < stacked; i++) {
         int64_t value = call_arg_int(c, argc + i);
-        if (value != args[StackStart + i]) args[StackStart + i] = value;
+        if (value != pushed[i]) args[StackStart + i] = value;
     }
     if (result) *result = call_result_int(c, 0);
     int cancelled = call_cancelled(c);

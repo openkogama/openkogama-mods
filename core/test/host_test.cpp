@@ -96,6 +96,18 @@ int main(int argc, char **argv) {
     check(frame[14] == 42, "event changed the first stack argument");
     check(frame[15] == 5, "event left the other stack slots alone");
 
+    api->on("ev.pointer", [](ok_call *c, void *u) {
+        const OkMod *a = (const OkMod *)u;
+        int64_t *slot = (int64_t *)(uintptr_t)a->arg_int(c, 1);
+        if (slot) *slot = 99;
+    }, (void *)api);
+
+    int64_t caller[18] = {};
+    caller[1] = (int64_t)(uintptr_t)&caller[14];
+    caller[14] = 7;
+    run_event("ev.pointer", caller, 8, nullptr);
+    check(caller[14] == 99, "a write through a pointer into the caller's frame survives the event");
+
     int unboxed = 0;
     check(api->field_ptr(0, "Missing", "field") == nullptr, "no field pointer without a game");
     check(api->unbox(0, &unboxed, sizeof(unboxed)) == 0, "nothing to unbox without a game");

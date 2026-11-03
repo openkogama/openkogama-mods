@@ -148,6 +148,10 @@ namespace render {
                 std::snprintf(buffer, 8, "F%d", (int)(key - VK_F1 + 1));
                 return buffer;
             }
+            if (key >= VK_NUMPAD0 && key <= VK_NUMPAD9) {
+                std::snprintf(buffer, 8, "Numpad%d", (int)(key - VK_NUMPAD0));
+                return buffer;
+            }
             switch (key) {
                 case VK_SPACE: return "Space";
                 case VK_RETURN: return "Enter";
@@ -167,6 +171,11 @@ namespace render {
                 case VK_END: return "End";
                 case VK_PRIOR: return "PageUp";
                 case VK_NEXT: return "PageDown";
+                case VK_MULTIPLY: return "NumpadMultiply";
+                case VK_ADD: return "NumpadAdd";
+                case VK_SUBTRACT: return "NumpadSubtract";
+                case VK_DECIMAL: return "NumpadDecimal";
+                case VK_DIVIDE: return "NumpadDivide";
                 default: return nullptr;
             }
         }

@@ -103,6 +103,10 @@ add_library(scripts_core STATIC
     ${SCRIPTS}/src/runtime.cpp
     ${SCRIPTS}/src/api.cpp
     ${SCRIPTS}/src/game.cpp
+    ${SCRIPTS}/src/build.cpp
+    ${SCRIPTS}/src/tools.cpp
+    ${SCRIPTS}/src/editor.cpp
+    ${SCRIPTS}/src/files.cpp
     ${SCRIPTS}/src/images.cpp
     ${SCRIPTS}/src/textures.cpp
     ${SCRIPTS}/src/frame.cpp

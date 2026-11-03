@@ -2,6 +2,8 @@
 #include "okmod.h"
 #include "runtime.h"
 #include <cctype>
+#include <cstdint>
+#include <cstring>
 #include <map>
 #include <set>
 #include <string>
@@ -104,6 +106,7 @@ namespace game {
                 || (api->invoke(ui, "ModeControllerBase", "get_IsInPauseMenu", 0, nullptr, "", 'i') & 0xFF) != 0);
         }
         constexpr int64_t ByInstance = 1;
+        std::set<int> switchedOff;
 
         ok_object SystemType(const std::string& qualified) {
             static std::map<std::string, ok_object> known;
@@ -164,6 +167,12 @@ namespace game {
             std::string type = ComponentType(element);
             const Alias* alias = AliasOf(element);
             if (!type.empty()) return ClassName(type) ? Interface(type, alias ? alias->also : nullptr) : std::vector<ok_object>{};
+            if (element.empty()) {
+                std::vector<ok_object> objects;
+                for (ok_object root : Roots())
+                    if (ok_object object = Call(root, "UnityEngine.Component", "get_gameObject")) objects.push_back(object);
+                return objects;
+            }
             for (ok_object root : Roots()) {
                 ok_object found = root;
                 if (!element.empty()) {
@@ -212,6 +221,11 @@ namespace game {
         ok_object LocalPlayer() {
             if (ok_object player = Controller("get_LocalPlayer")) return player;
             return Call(Controller("get_Game"), "MVNetworkGame", "get_LocalPlayer");
+        }
+
+        ok_object LocalAvatar() {
+            ok_object avatar = Call(Controller("get_WOCM"), "MVWorldObjectClientManager", "get_AvatarLocal");
+            return avatar ? avatar : api->call_static_obj("GameDB", "get_LocalAvatar");
         }
     }
 
@@ -286,6 +300,14 @@ namespace game {
         return parts;
     }
 
+    bool ActiveUnlessSwitchedOff(ok_object object) {
+        for (ok_object transform = TransformOf(object); transform; transform = Call(transform, "UnityEngine.Transform", "get_parent")) {
+            ok_object owner = Call(transform, "UnityEngine.Component", "get_gameObject");
+            if (owner && !Active(owner) && !switchedOff.count(Id(owner))) return false;
+        }
+        return true;
+    }
+
     void Hide(const std::string& element, std::map<int, Saved>& saved) {
         if (!api) return;
         static const float Zero[3] = {0, 0, 0};
@@ -301,6 +323,7 @@ namespace game {
             }
             if (known->second.canvas) {
                 if (Active(object)) SetActive(object, false);
+                switchedOff.insert(id);
                 continue;
             }
             float scale[3] = {0, 0, 0};
@@ -314,7 +337,10 @@ namespace game {
             auto known = saved.find(Id(object));
             if (known == saved.end()) continue;
             if (!known->second.canvas) SetScale(object, known->second.scale);
-            else if (known->second.active) SetActive(object, true);
+            else {
+                switchedOff.erase(known->first);
+                if (known->second.active) SetActive(object, true);
+            }
         }
     }
 
@@ -337,7 +363,7 @@ namespace game {
         if (!wasLocked) return;
         ok_object ui = Controller("get_PlayModeUI");
         ok_object state = api->field_obj(ui, "DesktopPlayModeController", "playModeState");
-        bool playing = state && (api->invoke(state, "UnityEngine.GameObject", "get_activeInHierarchy", 0, nullptr, "", 'i') & 0xFF) != 0;
+        bool playing = state && ActiveUnlessSwitchedOff(state);
         if (playing && !InMenu(ui)) SetCursor(LockedCursor, false);
     }
 
@@ -446,5 +472,69 @@ namespace game {
         int64_t argument = (int64_t)texture;
         api->invoke(0, "UnityEngine.Object", "Destroy", 1, &argument, "o", 'v');
         return used;
+    }
+
+    bool RestoreHealth() {
+        if (!api) return false;
+        ok_object avatar = LocalAvatar();
+        ok_object health = avatar ? api->field_obj(avatar, "MVAvatar", "Health") : 0;
+        ok_object most = avatar ? api->field_obj(avatar, "MVAvatar", "MaxHealth") : 0;
+        if (!health || !most) return false;
+        int32_t limit = (int32_t)api->invoke(most, nullptr, "get_Value", 0, nullptr, "", 'i');
+        int32_t raw = (int32_t)api->invoke(health, nullptr, "get_Value", 0, nullptr, "", 'i');
+        float current;
+        std::memcpy(&current, &raw, 4);
+        if (limit <= 0 || current >= (float)limit) return true;
+        float full = (float)limit;
+        int64_t bits = 0;
+        std::memcpy(&bits, &full, 4);
+        api->invoke(health, nullptr, "set_Value", 1, &bits, "f", 'v');
+        return true;
+    }
+
+    bool SetPlayerPosition(const float* value) {
+        if (!api) return false;
+        ok_object avatar = LocalAvatar();
+        if (!avatar) return false;
+        ok_vec3 position{value[0], value[1], value[2]};
+        int64_t argument = (int64_t)(uintptr_t)&position;
+        api->invoke(avatar, "MVWorldObjectClient", "set_Position", 1, &argument, "p", 'v');
+        return true;
+    }
+
+    ok_object CrosshairImage() {
+        if (!api) return 0;
+        ok_object type = SystemType("CrossHair, Assembly-CSharp");
+        if (!type) return 0;
+        int64_t search[] = {(int64_t)type, 1, 1, 0, 0, 0};
+        for (ok_object object : Elements("crosshair")) {
+            ok_object found = (ok_object)api->invoke(object, "UnityEngine.GameObject", "GetComponentsInternal", 6, search, "oiiiio", 'o');
+            const ok_object* parts = (const ok_object*)api->array_data(found);
+            if (!parts || api->array_length(found) == 0) continue;
+            if (ok_object image = api->field_obj(parts[0], "CrossHair", "crossHair")) return image;
+        }
+        return 0;
+    }
+
+    bool TintCrosshair(const float* rgba) {
+        ok_object image = CrosshairImage();
+        if (!image) return false;
+        float color[4] = {rgba[0], rgba[1], rgba[2], rgba[3]};
+        int64_t argument = Pointer(&color);
+        api->invoke(image, "UnityEngine.UI.Graphic", "set_color", 1, &argument, "p", 'v');
+        return true;
+    }
+
+    std::vector<ok_object> FindAll(const std::string& qualifiedType) {
+        std::vector<ok_object> objects;
+        if (!api) return objects;
+        ok_object type = SystemType(qualifiedType);
+        if (!type) return objects;
+        int64_t search[] = {(int64_t)type, IncludeInactive, ByInstance};
+        ok_object found = (ok_object)api->invoke(0, "UnityEngine.Object", "FindObjectsByType", 3, search, "oii", 'o');
+        const ok_object* data = (const ok_object*)api->array_data(found);
+        int count = api->array_length(found);
+        for (int i = 0; data && i < count; i++) objects.push_back(data[i]);
+        return objects;
     }
 }

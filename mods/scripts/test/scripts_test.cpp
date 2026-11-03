@@ -1,4 +1,5 @@
 #include "api.h"
+#include "build.h"
 #include "frame.h"
 #include "images.h"
 #include "runtime.h"
@@ -159,6 +160,12 @@ int main(int argc, char** argv) {
     Expect(Logged("hud", "server files ok"), "files from the server draw by id once they are there and tell how they are coming");
     Expect(result.nearest > 0, "images can be drawn with nearest filtering");
     Expect(Logged("hud", "shapes ok"), "polygons draw one at a time and in bulk and refuse bad shapes");
+    Expect(Logged("limits", "limits ok"), "build settings and god mode answer without a game");
+    Expect(Logged("tools", "tools ok") && Logged("tools", "tools ui ok"), "editor, camera, graphics and game tools answer without a game and the new widgets draw");
+    Expect(Logged("kogamatools", "kogamatools ok") && Logged("kogamatools", "kogamatools ui ok"), "the KogamaTools functions answer without a game, refuse bad files and draw their tables");
+    Expect(runtime::Ask("command", {runtime::Arg::Of(std::string("/kt"))}) && Logged("kogamatools", "command /kt"), "a script can take a chat command");
+    Expect(!runtime::Ask("command", {runtime::Arg::Of(std::string("/other"))}), "a chat command no script takes goes on to the game");
+    Expect(build::Limit() && !build::Blue() && api::God(), "build settings and god mode hold while their script runs");
     Expect(result.slowest < 1.0, "no frame takes longer than a second");
 
     fs::create_directories(folder / "reload");
@@ -173,6 +180,7 @@ int main(int argc, char** argv) {
 
     runtime::Close();
     Expect(!api::Blocking() && !api::Consumed("F9"), "the input goes back to the game when its script stops");
+    Expect(!build::Limit() && build::Blue() && !api::God(), "build settings and god mode end with their script");
     ImGui::DestroyContext();
     fs::remove_all(folder, error);
     std::printf("%d failed\n", failed);

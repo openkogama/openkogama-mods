@@ -1,5 +1,8 @@
 #include "okmod.h"
 #include "api.h"
+#include "build.h"
+#include "editor.h"
+#include "tools.h"
 #include "game.h"
 #include "images.h"
 #include "remote.h"
@@ -68,6 +71,8 @@ namespace {
             runtime::Emit("message", {runtime::Arg::Of(message.name), runtime::Arg::Of(message.data)});
         runtime::Tick(dt);
         api::Maintain(dt);
+        tools::Apply();
+        editor::Tick(dt);
         api::HoldCursor();
         if (api::Blocking()) game::SuppressInput();
         images::Sweep();
@@ -75,7 +80,9 @@ namespace {
     }
 
     void OnLateFrame(ok_call*, void*) {
-        if (started) api::HoldCursor();
+        if (!started) return;
+        api::HoldCursor();
+        tools::Apply();
     }
 
     void OnLoading(ok_call*, void*) {
@@ -89,6 +96,14 @@ namespace {
         loaded = Clock::now();
     }
 
+    void OnCommand(ok_call* call, void*) {
+        if (!started) return;
+        char line[1024] = "";
+        ok_object text = host->arg_object(call, 0);
+        if (!text || host->string_utf8(text, line, sizeof(line)) <= 0) return;
+        if (runtime::Ask("command", {runtime::Arg::Of(std::string(line))})) host->cancel(call);
+    }
+
     void OnQuit(ok_call*, void*) {
         remote::Stop();
         if (!started) return;
@@ -99,6 +114,10 @@ namespace {
     int Start(const OkMod* api) {
         host = api;
         game::Attach(api);
+        build::Attach(api);
+        tools::Attach(api);
+        editor::Attach(api);
+        api::SetHost(api);
         log = _wfopen((GameFolder() / "scripts.log").c_str(), L"w");
         runtime::SetLogger(Write);
         server = remote::Start(GameFolder() / "scripts-server");
@@ -109,6 +128,7 @@ namespace {
         api->on("world.loaded", OnWorld, nullptr);
         api->on("frame.late", OnLateFrame, nullptr);
         api->on("app.quit", OnQuit, nullptr);
+        api->on("chat.command", OnCommand, nullptr);
         return 0;
     }
 }

@@ -2,6 +2,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include "okmod.h"
 
 struct OkMod;
 
@@ -40,4 +41,9 @@ namespace game {
     void FreeCursor();
     void ReturnCursor(bool wasLocked);
     void SuppressInput();
+    bool RestoreHealth();
+    bool SetPlayerPosition(const float* value);
+    bool TintCrosshair(const float* rgba);
+    ok_object CrosshairImage();
+    std::vector<ok_object> FindAll(const std::string& qualifiedType);
 }

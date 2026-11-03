@@ -3,6 +3,7 @@
 #include <vector>
 
 struct lua_State;
+struct OkMod;
 
 namespace api {
     struct KeyEvent {
@@ -13,6 +14,7 @@ namespace api {
     using Sender = bool (*)(const std::string& name, const std::string& data);
 
     void SetSender(Sender sender);
+    void SetHost(const OkMod* host);
     void Register(lua_State* L);
     void Style();
     void LoadFonts();
@@ -28,5 +30,6 @@ namespace api {
     void HoldCursor();
     void Key(const std::string& name, bool down);
     void ReleaseKeys();
+    bool God();
     std::vector<KeyEvent> TakeKeys();
 }

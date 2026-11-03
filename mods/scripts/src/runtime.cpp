@@ -60,6 +60,7 @@ namespace runtime {
             Script* script;
             const char* name;
             const std::vector<Arg>* args;
+            bool* answer = nullptr;
         };
 
         Logger logger = nullptr;
@@ -114,13 +115,13 @@ namespace runtime {
             Log("[" + script.name + "] stopped after " + std::to_string(FailureLimit) + " errors");
         }
 
-        bool Call(Script& script, int args, std::chrono::milliseconds budget) {
+        bool Call(Script& script, int args, std::chrono::milliseconds budget, int results = 0) {
             lua_State* L = script.L;
             int handler = lua_gettop(L) - args;
             lua_pushcfunction(L, Traceback);
             lua_insert(L, handler);
             script.deadline = Clock::now() + budget;
-            int status = lua_pcall(L, args, 0, handler);
+            int status = lua_pcall(L, args, results, handler);
             lua_sethook(L, Watchdog, LUA_MASKCOUNT, Slice);
             if (status != LUA_OK) {
                 Fail(script, lua_tostring(L, -1));
@@ -166,7 +167,13 @@ namespace runtime {
             for (lua_Integer i = 1; i <= count && !event->script->stopped; i++) {
                 lua_rawgeti(L, list, i);
                 for (const Arg& arg : *event->args) Push(L, arg);
-                Call(*event->script, (int)event->args->size(), CallBudget);
+                if (!event->answer) {
+                    Call(*event->script, (int)event->args->size(), CallBudget);
+                    continue;
+                }
+                if (!Call(*event->script, (int)event->args->size(), CallBudget, 1)) continue;
+                if (lua_toboolean(L, -1)) *event->answer = true;
+                lua_pop(L, 1);
             }
             return 0;
         }
@@ -600,6 +607,17 @@ namespace runtime {
     void Emit(const char* event, const std::vector<Arg>& args) {
         for (auto& script : scripts) Dispatch(*script, event, args);
         Sweep();
+    }
+
+    bool Ask(const char* event, const std::vector<Arg>& args) {
+        bool answer = false;
+        for (auto& script : scripts) {
+            if (!script->L || script->stopped) continue;
+            Event asked{script.get(), event, &args, &answer};
+            Protected(*script, RunHandlers, &asked);
+        }
+        Sweep();
+        return answer;
     }
 
     void Keep(const char* event) {

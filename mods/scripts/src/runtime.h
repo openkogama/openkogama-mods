@@ -32,6 +32,7 @@ namespace runtime {
     void Tick(double dt);
     void Draw();
     void Emit(const char* event, const std::vector<Arg>& args = {});
+    bool Ask(const char* event, const std::vector<Arg>& args = {});
     void Keep(const char* event);
     int Count();
 

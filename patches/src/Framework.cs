@@ -12,10 +12,27 @@ public static class Framework
     {
         uint? Resolve(string type, string method)
         {
+            string module = Il2Cpp.Game;
+            int bang = type.IndexOf('!');
+            if (bang >= 0)
+            {
+                module = type[..bang];
+                type = type[(bang + 1)..];
+            }
             int open = method.IndexOf('(');
             if (open >= 0)
-                return il2cpp.Find(type, method[..open], method[(open + 1)..^1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-            return Enumerable.Range(0, MaxParameters).Select(parameters => il2cpp.Find(type, method, parameters)).FirstOrDefault(rva => rva is not null);
+                return il2cpp.Find(module, type, method[..open], method[(open + 1)..^1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            int slash = method.IndexOf('/');
+            if (slash >= 0 && int.TryParse(method[(slash + 1)..], out int count))
+                return il2cpp.Find(module, type, method[..slash], count);
+            return Enumerable.Range(0, MaxParameters).Select(parameters => il2cpp.Find(module, type, method, parameters)).FirstOrDefault(rva => rva is not null);
+        }
+
+        foreach (string module in Features.Hooks.Select(h => h.Type).Concat(Features.Toggles.Select(t => t.Type))
+                     .Where(type => type.Contains('!')).Select(type => type[..type.IndexOf('!')]).Distinct())
+        {
+            try { il2cpp.Load(module); }
+            catch (Exception error) { log($"module {module} not loaded: {error.Message}"); }
         }
 
         var sites = new List<Hook.Site>();

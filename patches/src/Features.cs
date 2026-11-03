@@ -17,6 +17,18 @@ public static class Features
         ("anticheat_off", "CheatHandling", "CheatSoftwareRunningDetected", null),
         ("anticheat_off", "CheatHandling", "TextureHackDetected", null),
         ("anticheat_off", "CheatHandling", "ExecuteBan", null),
+
+        ("third_person", "PickupItem", "get_FirstPerson", 0),
+        ("hide_notifications", "NotificationController", "OnNotificationReceived", null),
+        ("hide_notifications", "NotificationsManager", "InstantiateNotification", null),
+        ("fast_respawn", "DeathUIController", "StartDeathBriefing", null),
+        ("free_elite", "MVClientSettings", "get_IsSubscriber", 1),
+        ("antiban", "CheatHandling", "Init", null),
+        ("antiban", "MVNetworkGame.OperationRequests", "Ban(CheatType)", null),
+        ("antiban", "MVNetworkGame.OperationRequests", "Ban(int,MVPlayer,string)", null),
+        ("antiban", "MVNetworkGame.OperationRequests", "Expel", null),
+        ("antiban", "MVNetworkGame.OperationRequests", "Kick", null),
+        ("railgun_override", "PickupItemRailGun", "DoChargingAnimation", null),
     ];
 
     public static readonly (string Event, string Type, string Method)[] Hooks =
@@ -50,6 +62,22 @@ public static class Features
         ("settings.slider_float", "SettingsSlider", "Initialize(string,float,float,float)"),
         ("settings.slider_int", "SettingsSlider", "Initialize(string,int,int,int)"),
         ("settings.slider_changed", "SettingsSlider", "ValueChanged"),
+        ("chat.command", "TextCommand", "Resolve"),
+        ("editor.select_hit", "SelectionController", "Select(VoxelHit,bool,bool)"),
+        ("editor.deselect_all", "SelectionController", "DeSelectAll"),
+        ("editor.deselect_except", "SelectionController", "DeSelectAllExcept"),
+        ("editor.deselect_wo", "SelectionController", "DeSelectWorldObject"),
+        ("editor.link_loop", "MVWorldObject.dll!LogicObjectManager", "ValidateLink/4"),
+        ("editor.link_validate", "MVWorldObject.dll!LogicObjectManager", "ValidateLink/5"),
+        ("editor.object_link_enabler", "MVObjectEnabler", "ValidateObjectLinkTarget"),
+        ("editor.object_link_transparency", "WorldObjectTypes.MVObjectTransparency.MVObjectTransparency", "ValidateObjectLinkTarget"),
+        ("editor.add_object_link", "ESAddObjectLink", "Enter"),
+        ("editor.push_state", "FSMEntity", "PushState(EditorEvent,EditorEvent)"),
+        ("pvp.killed", "AvatarInteractable", "DoKilledNotification"),
+        ("pvp.fell", "AvatarInteractable", "DieFromFalling"),
+        ("pvp.stuck", "AvatarInteractable", "DieFromStuck"),
+        ("pvp.stuck_long", "AvatarInteractable", "DieFromBeingStuck"),
+        ("pvp.suicide", "MVAvatarLocal", "Suicide"),
     ];
 
     public static readonly (string Flag, string Type, string Method, string Param, string Arg, double Fallback)[] Floats =

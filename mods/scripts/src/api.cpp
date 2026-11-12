@@ -26,6 +26,7 @@ namespace api {
         constexpr float LargestText = 160.0f;
         constexpr size_t FontLimit = 16;
         constexpr size_t InputLimit = 1024;
+        constexpr size_t TextLimit = 16u << 10;
         constexpr size_t QueueLimit = 256;
         constexpr size_t MessageLimit = 64u << 10;
         constexpr size_t WindowLimit = 32;
@@ -220,10 +221,24 @@ namespace api {
 
         std::string Text(lua_State* L, int options, const char* name) {
             if (!Field(L, options, name)) return {};
-            const char* text = lua_tostring(L, -1);
-            std::string value = text ? text : "";
+            size_t length = 0;
+            const char* text = lua_tolstring(L, -1, &length);
+            std::string value = text ? std::string(text, std::min(length, TextLimit)) : "";
             lua_pop(L, 1);
             return value;
+        }
+
+        const char* Printed(lua_State* L, int index, size_t* length) {
+            const char* text = luaL_tolstring(L, index, length);
+            if (*length > TextLimit) luaL_argerror(L, index, "text is up to 16384 bytes");
+            return text;
+        }
+
+        const char* Label(lua_State* L, int index) {
+            size_t length = 0;
+            const char* text = luaL_checklstring(L, index, &length);
+            if (length > InputLimit) luaL_argerror(L, index, "labels are up to 1024 bytes");
+            return text;
         }
 
         ImU32 ColorOption(lua_State* L, int options, const char* name, ImU32 fallback) {
@@ -409,7 +424,7 @@ namespace api {
             NeedDraw(L);
             lua_settop(L, 4);
             size_t length = 0;
-            const char* text = luaL_tolstring(L, 1, &length);
+            const char* text = Printed(L, 1, &length);
             float x = Coordinate(L, 2), y = Coordinate(L, 3);
             ImFont* font = FontFor(L, Text(L, 4, "font"));
             float size = std::round(std::clamp(Number(L, 4, "size", font->LegacySize), SmallestText, LargestText));
@@ -430,7 +445,7 @@ namespace api {
             NeedDraw(L);
             lua_settop(L, 3);
             size_t length = 0;
-            const char* text = luaL_tolstring(L, 1, &length);
+            const char* text = Printed(L, 1, &length);
             ImFont* font = FontFor(L, luaL_optstring(L, 3, ""));
             ImVec2 extent = font->CalcTextSizeA(TextSize(L, 2, font), FLT_MAX, 0.0f, text, text + length);
             lua_pushnumber(L, extent.x);
@@ -550,7 +565,7 @@ namespace api {
 
         int UiWindow(lua_State* L) {
             NeedDraw(L);
-            std::string id = WindowId(L, luaL_checkstring(L, 1));
+            std::string id = WindowId(L, Label(L, 1));
             luaL_checktype(L, 2, LUA_TFUNCTION);
             std::set<std::string>& known = windowsOf[runtime::Name(L)];
             if (!known.count(id)) {
@@ -610,7 +625,7 @@ namespace api {
             NeedWindow(L);
             lua_settop(L, 2);
             size_t length = 0;
-            const char* text = luaL_tolstring(L, 1, &length);
+            const char* text = Printed(L, 1, &length);
             bool colored = Field(L, 2, "color");
             if (colored) lua_pop(L, 1);
             ImU32 color = ColorOption(L, 2, "color", 0);
@@ -625,7 +640,7 @@ namespace api {
 
         int UiButton(lua_State* L) {
             NeedWindow(L);
-            const char* label = luaL_checkstring(L, 1);
+            const char* label = Label(L, 1);
             float width = Number(L, 2, "width", 0.0f), height = Number(L, 2, "height", 0.0f);
             lua_pushboolean(L, ImGui::Button(label, ImVec2(width, height)));
             return 1;
@@ -633,7 +648,7 @@ namespace api {
 
         int UiCheckbox(lua_State* L) {
             NeedWindow(L);
-            const char* label = luaL_checkstring(L, 1);
+            const char* label = Label(L, 1);
             bool value = lua_toboolean(L, 2) != 0;
             bool changed = ImGui::Checkbox(label, &value);
             lua_pushboolean(L, value);
@@ -643,7 +658,7 @@ namespace api {
 
         int UiSlider(lua_State* L) {
             NeedWindow(L);
-            const char* label = luaL_checkstring(L, 1);
+            const char* label = Label(L, 1);
             bool changed = false;
             if (lua_isinteger(L, 2) && lua_isinteger(L, 3) && lua_isinteger(L, 4)) {
                 auto whole = [L](int index) { return (int)std::clamp<lua_Integer>(lua_tointeger(L, index), -1000000000, 1000000000); };
@@ -662,7 +677,7 @@ namespace api {
 
         int UiInput(lua_State* L) {
             NeedWindow(L);
-            const char* label = luaL_checkstring(L, 1);
+            const char* label = Label(L, 1);
             size_t length = 0;
             const char* text = luaL_optlstring(L, 2, "", &length);
             std::string hint = Text(L, 3, "hint");
@@ -1032,7 +1047,7 @@ namespace api {
 
         int UiTabs(lua_State* L) {
             NeedWindow(L);
-            const char* id = luaL_checkstring(L, 1);
+            const char* id = Label(L, 1);
             luaL_checktype(L, 2, LUA_TFUNCTION);
             int status = LUA_OK;
             if (ImGui::BeginTabBar(id)) {
@@ -1048,7 +1063,7 @@ namespace api {
         int UiTab(lua_State* L) {
             NeedWindow(L);
             if (tabBars == 0) return luaL_error(L, "ui.tab works inside ui.tabs");
-            const char* label = luaL_checkstring(L, 1);
+            const char* label = Label(L, 1);
             luaL_checktype(L, 2, LUA_TFUNCTION);
             bool open = ImGui::BeginTabItem(label);
             int status = LUA_OK;
@@ -1063,7 +1078,7 @@ namespace api {
 
         int UiCombo(lua_State* L) {
             NeedWindow(L);
-            const char* label = luaL_checkstring(L, 1);
+            const char* label = Label(L, 1);
             int current = (int)luaL_checkinteger(L, 2) - 1;
             luaL_checktype(L, 3, LUA_TTABLE);
             size_t count = lua_rawlen(L, 3);
@@ -1090,7 +1105,7 @@ namespace api {
 
         int UiColor(lua_State* L) {
             NeedWindow(L);
-            const char* label = luaL_checkstring(L, 1);
+            const char* label = Label(L, 1);
             ImVec4 color = ImGui::ColorConvertU32ToFloat4(Color(L, 2, IM_COL32_WHITE));
             float values[4] = {color.x, color.y, color.z, color.w};
             bool changed = ImGui::ColorEdit4(label, values);
@@ -1104,7 +1119,7 @@ namespace api {
 
         int UiNumber(lua_State* L) {
             NeedWindow(L);
-            const char* label = luaL_checkstring(L, 1);
+            const char* label = Label(L, 1);
             float value = (float)luaL_checknumber(L, 2);
             float step = Number(L, 3, "step", 0.0f);
             std::string shown = Shown(label);
@@ -1122,7 +1137,7 @@ namespace api {
 
         int UiInteger(lua_State* L) {
             NeedWindow(L);
-            const char* label = luaL_checkstring(L, 1);
+            const char* label = Label(L, 1);
             int value = (int)std::clamp<lua_Integer>(luaL_checkinteger(L, 2), -1000000000, 1000000000);
             int step = (int)Number(L, 3, "step", 1.0f);
             std::string shown = Shown(label);
@@ -1139,7 +1154,7 @@ namespace api {
 
         int UiTree(lua_State* L) {
             NeedWindow(L);
-            const char* label = luaL_checkstring(L, 1);
+            const char* label = Label(L, 1);
             luaL_checktype(L, 2, LUA_TFUNCTION);
             bool open = ImGui::TreeNode(label);
             int status = LUA_OK;
@@ -1160,7 +1175,7 @@ namespace api {
 
         int UiTable(lua_State* L) {
             NeedWindow(L);
-            const char* id = luaL_checkstring(L, 1);
+            const char* id = Label(L, 1);
             luaL_checktype(L, 2, LUA_TTABLE);
             luaL_checktype(L, 3, LUA_TTABLE);
             int columns = (int)lua_rawlen(L, 2);
@@ -1418,7 +1433,7 @@ namespace api {
 
         int UiDrag(lua_State* L) {
             NeedWindow(L);
-            const char* label = luaL_checkstring(L, 1);
+            const char* label = Label(L, 1);
             int value = (int)std::clamp<lua_Integer>(luaL_checkinteger(L, 2), -1000000000, 1000000000);
             bool changed = ImGui::DragInt(label, &value);
             lua_pushinteger(L, value);
@@ -1428,7 +1443,7 @@ namespace api {
 
         int UiNumbers(lua_State* L) {
             NeedWindow(L);
-            const char* label = luaL_checkstring(L, 1);
+            const char* label = Label(L, 1);
             luaL_checktype(L, 2, LUA_TTABLE);
             int count = (int)lua_rawlen(L, 2);
             luaL_argcheck(L, count >= 2 && count <= 4, 2, "2 to 4 numbers");
@@ -1450,7 +1465,7 @@ namespace api {
 
         int UiColumns(lua_State* L) {
             NeedWindow(L);
-            const char* id = luaL_checkstring(L, 1);
+            const char* id = Label(L, 1);
             int count = (int)luaL_checkinteger(L, 2);
             luaL_argcheck(L, count >= 1 && count <= TableColumns, 2, "a table has 1 to 16 columns");
             luaL_checktype(L, 3, LUA_TFUNCTION);
@@ -1653,7 +1668,7 @@ namespace api {
 
         int UiTextBox(lua_State* L) {
             NeedWindow(L);
-            const char* label = luaL_checkstring(L, 1);
+            const char* label = Label(L, 1);
             size_t length = 0;
             const char* text = luaL_checklstring(L, 2, &length);
             float width = Number(L, 3, "width", 0.0f), height = Number(L, 3, "height", 0.0f);
@@ -1665,7 +1680,7 @@ namespace api {
 
         int UiChild(lua_State* L) {
             NeedWindow(L);
-            const char* id = luaL_checkstring(L, 1);
+            const char* id = Label(L, 1);
             luaL_checktype(L, 2, LUA_TFUNCTION);
             float width = Number(L, 3, "width", 0.0f), height = Number(L, 3, "height", 0.0f);
             ImVec2 size(width < 0 ? -FLT_MIN : width, height < 0 ? -FLT_MIN : height);

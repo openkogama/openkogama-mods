@@ -153,6 +153,8 @@ namespace remote {
             HINTERNET connection = WinHttpConnect(session, host, parts.nPort, 0);
             HINTERNET request = connection ? WinHttpOpenRequest(connection, method, resource, nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                 parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0) : nullptr;
+            DWORD redirects = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+            if (request) WinHttpSetOption(request, WINHTTP_OPTION_REDIRECT_POLICY, &redirects, sizeof(redirects));
             DWORD status = 0, size = sizeof(status);
             bool ok = request && WinHttpSendRequest(request, payload.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : L"Content-Type: text/plain; charset=utf-8", payload.empty() ? 0 : (DWORD)-1L,
                     payload.empty() ? WINHTTP_NO_REQUEST_DATA : (LPVOID)payload.data(), (DWORD)payload.size(), (DWORD)payload.size(), 0)

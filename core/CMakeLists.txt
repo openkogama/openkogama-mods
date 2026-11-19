@@ -9,6 +9,11 @@ if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
+set(OPENKOGAMA_VERSION "0.0.0" CACHE STRING "product version written into the binaries")
+string(REGEX MATCH "^[0-9]+\\.[0-9]+\\.[0-9]+" OPENKOGAMA_VERSION_NUMBERS "${OPENKOGAMA_VERSION}")
+string(REPLACE "." "," OPENKOGAMA_VERSION_NUMBERS "${OPENKOGAMA_VERSION_NUMBERS}")
+configure_file(version.rc.in ${CMAKE_CURRENT_BINARY_DIR}/version.rc @ONLY)
+
 add_library(okmod_core STATIC
     src/core.cpp
     src/runtime_il2cpp.cpp
@@ -17,7 +22,7 @@ add_library(okmod_core STATIC
 target_include_directories(okmod_core PUBLIC ${CMAKE_SOURCE_DIR}/../include PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 # okmod.dll: what the patched game loads.
-add_library(okmod SHARED src/dllmain.cpp)
+add_library(okmod SHARED src/dllmain.cpp ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
 target_link_libraries(okmod PRIVATE okmod_core)
 target_include_directories(okmod PRIVATE ${CMAKE_SOURCE_DIR}/../include ${CMAKE_SOURCE_DIR}/src)
 
@@ -122,7 +127,7 @@ if(MSVC)
     target_compile_options(scripts_core PUBLIC /utf-8)
 endif()
 
-add_library(scripts SHARED ${SCRIPTS}/src/scripts.cpp ${SCRIPTS}/src/render.cpp ${SCRIPTS}/src/paint9.cpp ${SCRIPTS}/src/remote.cpp ${IMGUI}/imgui_impl_win32.cpp)
+add_library(scripts SHARED ${SCRIPTS}/src/scripts.cpp ${SCRIPTS}/src/render.cpp ${SCRIPTS}/src/paint9.cpp ${SCRIPTS}/src/remote.cpp ${IMGUI}/imgui_impl_win32.cpp ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
 target_link_libraries(scripts PRIVATE scripts_core d3d11 dxgi d3dcompiler dxguid dwmapi winhttp bcrypt shell32 user32 gdi32)
 set_target_properties(scripts PROPERTIES PREFIX "" OUTPUT_NAME "scripts")
 

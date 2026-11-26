@@ -147,7 +147,8 @@ namespace remote {
             parts.lpszUrlPath = resource;
             parts.dwUrlPathLength = 2048;
             if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts)) return false;
-            HINTERNET session = WinHttpOpen(L"OpenKogama scripts", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+            const bool loopback = !_wcsicmp(host, L"127.0.0.1") || !_wcsicmp(host, L"localhost");
+            HINTERNET session = WinHttpOpen(L"OpenKogama scripts", loopback ? WINHTTP_ACCESS_TYPE_NO_PROXY : WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
             if (!session) return false;
             WinHttpSetTimeouts(session, 5000, 5000, 5000, timeout);
             HINTERNET connection = WinHttpConnect(session, host, parts.nPort, 0);
